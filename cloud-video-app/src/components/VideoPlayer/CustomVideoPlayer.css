@@ -1,0 +1,255 @@
+.player {
+    display: flex;
+    height: 100vh;
+    overflow-x: hidden;
+    background-color: #000;
+}
+
+.chapters {
+    height: 100%;
+    background-color: #b657db;
+    backface-visibility: hidden;
+}
+
+.vjs-button>.vjs-icon-placeholder {
+    margin-top: 12px;
+}
+
+.video-js .vjs-control-bar {
+    padding: 0 20px;
+    font-size: 1.2em;
+}
+
+.come-from-left {
+    animation: comeFromLeft 0.3s;
+    transition: ease;
+    backface-visibility: hidden;
+    animation-fill-mode: forwards;
+}
+
+@keyframes comeFromLeft {
+    from {
+        transform: translateX(-10rem);
+        width: 0;
+        opacity: 0;
+    }
+
+    to {
+        transform: translateX(0);
+        width: 30%;
+        opacity: 1;
+    }
+}
+
+.go-to-left {
+    animation: goToLeft 0.3s;
+    transition: ease;
+    backface-visibility: hidden;
+    animation-fill-mode: forwards;
+}
+
+@keyframes goToLeft {
+    from {
+        transform: translateX(0);
+        width: 30%;
+        opacity: 1;
+    }
+
+    to {
+        transform: translateX(-10rem);
+        width: 0;
+        opacity: 0;
+    }
+}
+
+.chapters-button .vjs-icon-placeholder::before {
+    content: "/=";
+    font-size: inherit;
+    margin-top: 10px;
+}
+
+.rewindIcon .vjs-icon-placeholder:before {
+    content: "↶";
+    font-size: 20px;
+    font-weight: bold;
+    margin-top: 3px;
+}
+
+.fast-forward-icon .vjs-icon-placeholder:before {
+    content: "↷";
+    font-weight: bold;
+    font-size: 20px;
+    margin-top: 3px;
+}
+
+.fast-forward-icon:hover {
+    color: #5f3aa5;
+}
+
+.rewindIcon:hover {
+    color: #5f3aa5;
+}
+
+.fast-forward-icon:hover {
+    cursor: pointer;
+}
+
+.rewindIcon:hover {
+    cursor: pointer;
+}
+
+.video-js {
+    height: 100% !important;
+    width: 100%;
+    transition: width 0.3s;
+    backface-visibility: hidden;
+}
+
+/* Change all text and icon colors in the player. */
+/* .vjs-matrix.video-js {
+    color: #ff7300;
+  } */
+
+/* Change the border of the big play button. */
+.vjs-matrix .vjs-big-play-button {
+    border-color: #5f3aa5;
+    transition: ease;
+    border-radius: 20px;
+}
+
+.vjs-matrix .vjs-play-control {
+    /* color: rgb(6, 12, 6); */
+}
+
+/* Change the color of various "bars". */
+.vjs-matrix .vjs-volume-level,
+.vjs-matrix .vjs-play-progress,
+.vjs-matrix .vjs-slider-bar {
+    background-color: #5f3aa5 !important;
+}
+
+div.vjs-progress-control.vjs-control {
+    padding: 1em 1.7em 1em 1.7em;
+    display: border-box;
+    position: absolute;
+    width: 100%;
+    height: 1em;
+    top: 0.5em;
+    left: 0;
+    right: 0;
+}
+
+div.vjs-remaining-time.vjs-time-control.vjs-control {
+    margin-left: auto;
+}
+
+div.vjs-progress-holder.v js-slider.vjs-slider-horizontal {
+    margin: 0;
+}
+
+div.vjs-control-bar {
+    height: 3.1rem;
+    padding: 0 20px;
+}
+
+.skip-teaser-button {
+    position: absolute !important;
+    height: 0 !important;
+    bottom: 11vh;
+    left: 10px;
+}
+
+.skip-teaser-button:hover {
+    cursor: pointer;
+    color: #5f3aa5;
+}
+
+.skip-teaser-button::before {
+    content: "Skip-Teaser";
+    white-space: nowrap;
+    background-color: #fff;
+    color: #000;
+    padding: 10px;
+    border-radius: 10px;
+    border: 1px solid #5f3aa5;
+}
+
+.next-button-on-Control .vjs-icon-placeholder::before {
+    content: "❯";
+    white-space: nowrap;
+    /* font-size: 1.5em; */
+    /* background-color: rgba(0, 0, 0, 0.2); */
+}
+
+.next-button-side {
+    position: absolute !important;
+    height: 0 !important;
+    bottom: 50%;
+    right: 40px;
+}
+
+.next-button-side::before {
+    content: "Next-Video";
+    white-space: nowrap;
+    background-color: #fff;
+    color: #000;
+    padding: 10px;
+    border-radius: 10px;
+    border: 1px solid #5f3aa5;
+}
+
+.next-button-side:hover {
+    cursor: pointer;
+    color: #5f3aa5;
+}
+
+.vjs-big-play-button {
+    border-radius: 100px !important;
+}
+
+.video-js .vjs-big-play-button {
+    font-size: 3.5em !important;
+    line-height: 1.9em !important;
+    width: 2em !important;
+    height: 2em !important;
+}
+
+.vjs-menu-button-popup .vjs-menu {
+    display: none;
+    position: absolute;
+    bottom: 0;
+    width: 10em;
+    left: -3em;
+    height: 0;
+    margin-bottom: 0;
+    border-top-color: rgba(43, 51, 63, 0.7);
+    padding-bottom: 24px;
+}
+
+.vjs-has-started .vjs-control-bar {
+    height: 5em;
+    background: none;
+    background-image: linear-gradient(0deg, rgba(0, 0, 0, 0.88), transparent);
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    padding: 2em 1em 5em;
+    border-radius: 15px;
+    /* visibility: visible; */
+}
+
+.vjs-paused.vjs-has-started .vjs-big-play-button {
+    display: block;
+}
+
+.vjs-progress-holder:hover {
+    height: 0.5em !important;
+}
+
+.vjs-control-bar {
+    background-color: rgba(0, 0, 0, 0) !important;
+}
+
+.vjs-control {
+    height: 80%;
+}

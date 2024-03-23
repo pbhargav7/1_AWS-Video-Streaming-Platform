@@ -1,0 +1,74 @@
+{
+  "dev": {
+    "awscloudformation": {
+      "AuthRoleName": "amplify-client-dev-134047-authRole",
+      "UnauthRoleArn": "arn:aws:iam::762631247299:role/amplify-client-dev-134047-unauthRole",
+      "AuthRoleArn": "arn:aws:iam::762631247299:role/amplify-client-dev-134047-authRole",
+      "Region": "us-east-1",
+      "DeploymentBucketName": "amplify-client-dev-134047-deployment",
+      "UnauthRoleName": "amplify-client-dev-134047-unauthRole",
+      "StackName": "amplify-client-dev-134047",
+      "StackId": "arn:aws:cloudformation:us-east-1:762631247299:stack/amplify-client-dev-134047/fbcf8490-e1fd-11ed-a0ba-12d2a8091f4d",
+      "AmplifyAppId": "d39rwaysf4zxl0"
+    },
+    "categories": {
+      "auth": {
+        "client38e94ec1": {}
+      },
+      "storage": {
+        "client9c0665b0": {
+          "bucketName": "cloud-streaming-platform-source71e471f1-173vfzkf69t51",
+          "region": "us-east-1"
+        }
+      }
+    }
+  },
+  "stag": {
+    "awscloudformation": {
+      "AuthRoleName": "amplify-client-stag-122044-authRole",
+      "UnauthRoleArn": "arn:aws:iam::081044311094:role/amplify-client-stag-122044-unauthRole",
+      "AuthRoleArn": "arn:aws:iam::081044311094:role/amplify-client-stag-122044-authRole",
+      "Region": "us-east-1",
+      "DeploymentBucketName": "amplify-client-stag-122044-deployment",
+      "UnauthRoleName": "amplify-client-stag-122044-unauthRole",
+      "StackName": "amplify-client-stag-122044",
+      "StackId": "arn:aws:cloudformation:us-east-1:081044311094:stack/amplify-client-stag-122044/4ac5f8f0-e905-11ed-a01f-12537795dff7",
+      "AmplifyAppId": "d3qzlqf7e8ftx6"
+    },
+    "categories": {
+      "auth": {
+        "client38e94ec1": {}
+      },
+      "storage": {
+        "client9c0665b0": {
+          "bucketName": "amplify-client-stag-122044-deployment",
+          "region": "us-east-1"
+        }
+      }
+    }
+  },
+  "stage": {
+    "awscloudformation": {
+      "AuthRoleName": "amplify-client-stage-123046-authRole",
+      "UnauthRoleArn": "arn:aws:iam::081044311094:role/amplify-client-stage-123046-unauthRole",
+      "AuthRoleArn": "arn:aws:iam::081044311094:role/amplify-client-stage-123046-authRole",
+      "Region": "us-east-1",
+      "DeploymentBucketName": "amplify-client-stage-123046-deployment",
+      "UnauthRoleName": "amplify-client-stage-123046-unauthRole",
+      "StackName": "amplify-client-stage-123046",
+      "StackId": "arn:aws:cloudformation:us-east-1:081044311094:stack/amplify-client-stage-123046/b18a4d60-e906-11ed-982b-0e3d4404c141",
+      "AmplifyAppId": "d3qzlqf7e8ftx6"
+    },
+    "categories": {
+      "auth": {
+        "client38e94ec1": {}
+      },
+      "storage": {
+        "client86a57a70": {
+          "bucketName": "cloudstreamplatform-source71e471f1-1sbm76jenmfyn",
+          "region": "us-east-1"
+        }
+      }
+    }
+  }
+}

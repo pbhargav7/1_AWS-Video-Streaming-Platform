@@ -1,0 +1,57 @@
+{
+  "auth": {
+    "client38e94ec1": {
+      "customAuth": false,
+      "dependsOn": [],
+      "frontendAuthConfig": {
+        "mfaConfiguration": "OFF",
+        "mfaTypes": [
+          "SMS"
+        ],
+        "passwordProtectionSettings": {
+          "passwordPolicyCharacters": [],
+          "passwordPolicyMinLength": 8
+        },
+        "signupAttributes": [
+          "EMAIL"
+        ],
+        "socialProviders": [],
+        "usernameAttributes": [
+          "EMAIL"
+        ],
+        "verificationMechanisms": [
+          "EMAIL"
+        ]
+      },
+      "providerPlugin": "awscloudformation",
+      "service": "Cognito"
+    }
+  },
+  "hosting": {},
+  "parameters": {
+    "AMPLIFY_storage_client86a57a70_bucketName": {
+      "usedBy": [
+        {
+          "category": "storage",
+          "resourceName": "client86a57a70"
+        }
+      ]
+    },
+    "AMPLIFY_storage_client86a57a70_region": {
+      "usedBy": [
+        {
+          "category": "storage",
+          "resourceName": "client86a57a70"
+        }
+      ]
+    }
+  },
+  "storage": {
+    "client86a57a70": {
+      "dependsOn": [],
+      "providerPlugin": "awscloudformation",
+      "service": "S3",
+      "serviceType": "imported"
+    }
+  }
+}

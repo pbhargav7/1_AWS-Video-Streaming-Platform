@@ -1,0 +1,3069 @@
+Description: >-
+  (SO0021) - Video on Demand on AWS workflow with AWS Step Functions,
+  MediaConvert, MediaPackage, S3, CloudFront and DynamoDB. Version v6.1.2
+Metadata:
+  'AWS::CloudFormation::Interface':
+    ParameterGroups:
+      - Label:
+          default: Workflow
+        Parameters:
+          - AdminEmail
+          - WorkflowTrigger
+          - Glacier
+          - EnableSns
+          - EnableSqs
+      - Label:
+          default: AWS Elemental MediaConvert
+        Parameters:
+          - FrameCapture
+          - AcceleratedTranscoding
+      - Label:
+          default: AWS Elemental MediaPackage
+        Parameters:
+          - EnableMediaPackage
+    ParameterLabels:
+      AdminEmail:
+        default: Notification email address
+      Glacier:
+        default: Archive source content
+      WorkflowTrigger:
+        default: Workflow trigger
+      FrameCapture:
+        default: Enable Frame Capture
+      EnableMediaPackage:
+        default: Enable MediaPackage
+      AcceleratedTranscoding:
+        default: Accelerated Transcoding
+      EnableSns:
+        default: Enable SNS Notifications
+      EnableSqs:
+        default: Enable SQS Messaging
+Parameters:
+  AdminEmail:
+    Type: String
+    AllowedPattern: >-
+      ^[_A-Za-z0-9-\+]+(\.[_A-Za-z0-9-]+)*@[A-Za-z0-9-]+(\.[A-Za-z0-9]+)*(\.[A-Za-z]{2,})$
+    Description: >-
+      Email address for SNS notifications (subscribed users will receive ingest,
+      publishing, and error notifications)
+  WorkflowTrigger:
+    Type: String
+    Default: VideoFile
+    AllowedValues:
+      - VideoFile
+      - MetadataFile
+    Description: >-
+      How the workflow will be triggered (source video upload to S3 or source
+      metadata file upload)
+  Glacier:
+    Type: String
+    Default: DISABLED
+    AllowedValues:
+      - DISABLED
+      - GLACIER
+      - DEEP_ARCHIVE
+    Description: >-
+      If enabled, source assets will be tagged for archiving to Glacier or
+      Glacier Deep Archive once the workflow is complete
+  FrameCapture:
+    Type: String
+    Default: 'No'
+    AllowedValues:
+      - 'Yes'
+      - 'No'
+    Description: 'If enabled, frame capture is added to the job submitted to MediaConvert'
+  EnableMediaPackage:
+    Type: String
+    Default: 'No'
+    AllowedValues:
+      - 'Yes'
+      - 'No'
+    Description: 'If enabled, MediaPackage VOD will be included in the workflow'
+  EnableSns:
+    Type: String
+    Default: 'Yes'
+    AllowedValues:
+      - 'Yes'
+      - 'No'
+    Description: >-
+      Enable Ingest and Publish email notifications, error messages are not
+      affected by this parameter.
+  EnableSqs:
+    Type: String
+    Default: 'Yes'
+    AllowedValues:
+      - 'Yes'
+      - 'No'
+    Description: Publish the workflow results to an SQS queue to injest upstream
+  AcceleratedTranscoding:
+    Type: String
+    Default: PREFERRED
+    AllowedValues:
+      - ENABLED
+      - DISABLED
+      - PREFERRED
+    Description: >-
+      Enable accelerated transcoding in AWS Elemental MediaConvert. PREFERRED
+      will only use acceleration if the input files is supported. ENABLED
+      accleration is applied to all files (this will fail for unsupported file
+      types) see MediaConvert Documentation for more detail
+      https://docs.aws.amazon.com/mediaconvert/latest/ug/accelerated-transcoding.html
+Mappings:
+  AnonymousData:
+    SendAnonymousData:
+      Data: 'Yes'
+Conditions:
+  EnableMediaPackageCondition: !Equals 
+    - !Ref EnableMediaPackage
+    - 'Yes'
+  FrameCaptureCondition: !Equals 
+    - !Ref FrameCapture
+    - 'Yes'
+  EnableSnsCondition: !Equals 
+    - !Ref EnableSns
+    - 'Yes'
+  EnableSqsCondition: !Equals 
+    - !Ref EnableSqs
+    - 'Yes'
+  CDKMetadataAvailable: !Or 
+    - !Or 
+      - !Equals 
+        - !Ref 'AWS::Region'
+        - af-south-1
+      - !Equals 
+        - !Ref 'AWS::Region'
+        - ap-east-1
+      - !Equals 
+        - !Ref 'AWS::Region'
+        - ap-northeast-1
+      - !Equals 
+        - !Ref 'AWS::Region'
+        - ap-northeast-2
+      - !Equals 
+        - !Ref 'AWS::Region'
+        - ap-south-1
+      - !Equals 
+        - !Ref 'AWS::Region'
+        - ap-southeast-1
+      - !Equals 
+        - !Ref 'AWS::Region'
+        - ap-southeast-2
+      - !Equals 
+        - !Ref 'AWS::Region'
+        - ca-central-1
+      - !Equals 
+        - !Ref 'AWS::Region'
+        - cn-north-1
+      - !Equals 
+        - !Ref 'AWS::Region'
+        - cn-northwest-1
+    - !Or 
+      - !Equals 
+        - !Ref 'AWS::Region'
+        - eu-central-1
+      - !Equals 
+        - !Ref 'AWS::Region'
+        - eu-north-1
+      - !Equals 
+        - !Ref 'AWS::Region'
+        - eu-south-1
+      - !Equals 
+        - !Ref 'AWS::Region'
+        - eu-west-1
+      - !Equals 
+        - !Ref 'AWS::Region'
+        - eu-west-2
+      - !Equals 
+        - !Ref 'AWS::Region'
+        - eu-west-3
+      - !Equals 
+        - !Ref 'AWS::Region'
+        - me-south-1
+      - !Equals 
+        - !Ref 'AWS::Region'
+        - sa-east-1
+      - !Equals 
+        - !Ref 'AWS::Region'
+        - us-east-1
+      - !Equals 
+        - !Ref 'AWS::Region'
+        - us-east-2
+    - !Or 
+      - !Equals 
+        - !Ref 'AWS::Region'
+        - us-west-1
+      - !Equals 
+        - !Ref 'AWS::Region'
+        - us-west-2
+Resources:
+  Logs6819BB44:
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      AccessControl: LogDeliveryWrite
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: ObjectWriter
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+        - Key: SolutionId
+          Value: SO0021
+    UpdateReplacePolicy: Retain
+    DeletionPolicy: Retain
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W35
+            reason: Used to store access logs for other buckets
+          - id: W51
+            reason: Bucket does not need a bucket policy
+      cdk_nag:
+        rules_to_suppress:
+          - reason: Used to store access logs for other buckets
+            id: AwsSolutions-S1
+          - reason: Bucket is private and is not using HTTP
+            id: AwsSolutions-S10
+  Source71E471F1:
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: !Join 
+              - ''
+              - - !Ref 'AWS::StackName'
+                - '-soure-archive'
+            Status: Enabled
+            TagFilters:
+              - Key: !Ref 'AWS::StackName'
+                Value: GLACIER
+            Transitions:
+              - StorageClass: GLACIER
+                TransitionInDays: 1
+          - Id: !Join 
+              - ''
+              - - !Ref 'AWS::StackName'
+                - '-source-deep-archive'
+            Status: Enabled
+            TagFilters:
+              - Key: !Ref 'AWS::StackName'
+                Value: DEEP_ARCHIVE
+            Transitions:
+              - StorageClass: DEEP_ARCHIVE
+                TransitionInDays: 1
+      LoggingConfiguration:
+        DestinationBucketName: !Ref Logs6819BB44
+        LogFilePrefix: source-bucket-logs/
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+        - Key: SolutionId
+          Value: SO0021
+    UpdateReplacePolicy: Retain
+    DeletionPolicy: Retain
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W51
+            reason: Bucket does not need a bucket policy
+      cdk_nag:
+        rules_to_suppress:
+          - reason: Bucket is private and is not using HTTP
+            id: AwsSolutions-S10
+  Destination920A3C57:
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders:
+              - '*'
+            AllowedMethods:
+              - GET
+            AllowedOrigins:
+              - '*'
+            MaxAge: 3000
+      LoggingConfiguration:
+        DestinationBucketName: !Ref Logs6819BB44
+        LogFilePrefix: destination-bucket-logs/
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+        - Key: SolutionId
+          Value: SO0021
+    UpdateReplacePolicy: Retain
+    DeletionPolicy: Retain
+    Metadata:
+      'aws:cdk:path': VideoOnDemand/Destination/Resource
+      cdk_nag:
+        rules_to_suppress:
+          - reason: Bucket is private and is not using HTTP
+            id: AwsSolutions-S10
+  DestinationPolicy7982387E:
+    Type: 'AWS::S3::BucketPolicy'
+    Properties:
+      Bucket: !Ref Destination920A3C57
+      PolicyDocument:
+        Statement:
+          - Action: 's3:GetObject'
+            Effect: Allow
+            Principal:
+              CanonicalUser: !GetAtt 
+                - CloudFrontToS3CloudFrontDistributionOrigin1S3OriginB0637B8F
+                - S3CanonicalUserId
+            Resource: !Join 
+              - ''
+              - - !GetAtt 
+                  - Destination920A3C57
+                  - Arn
+                - /*
+        Version: 2012-10-17
+    Metadata:
+      'aws:cdk:path': VideoOnDemand/Destination/Policy/Resource
+      cfn_nag:
+        rules_to_suppress:
+          - id: F16
+            reason: Public website bucket policy requires a wildcard principal
+      cdk_nag:
+        rules_to_suppress:
+          - reason: Bucket is private and is not using HTTP
+            id: AwsSolutions-S10
+  CachePolicy26D8A535:
+    Type: 'AWS::CloudFront::CachePolicy'
+    Properties:
+      CachePolicyConfig:
+        DefaultTTL: 86400
+        MaxTTL: 86400
+        MinTTL: 0
+        Name: !Join 
+          - ''
+          - - cp-
+            - !Ref 'AWS::Region'
+            - '-'
+            - !Ref 'AWS::StackName'
+        ParametersInCacheKeyAndForwardedToOrigin:
+          CookiesConfig:
+            CookieBehavior: none
+          EnableAcceptEncodingBrotli: false
+          EnableAcceptEncodingGzip: false
+          HeadersConfig:
+            HeaderBehavior: whitelist
+            Headers:
+              - Origin
+              - Access-Control-Request-Method
+              - Access-Control-Request-Headers
+          QueryStringsConfig:
+            QueryStringBehavior: none
+    Metadata:
+      'aws:cdk:path': VideoOnDemand/CachePolicy/Resource
+  CloudFrontToS3CloudFrontDistributionOrigin1S3OriginB0637B8F:
+    Type: 'AWS::CloudFront::CloudFrontOriginAccessIdentity'
+    Properties:
+      CloudFrontOriginAccessIdentityConfig:
+        Comment: >-
+          Identity for
+          VideoOnDemandCloudFrontToS3CloudFrontDistributionOrigin1CC6EEFFD
+    Metadata:
+      'aws:cdk:path': >-
+        VideoOnDemand/CloudFrontToS3/CloudFrontDistribution/Origin1/S3Origin/Resource
+  CloudFrontToS3CloudFrontDistribution241D9866:
+    Type: 'AWS::CloudFront::Distribution'
+    Properties:
+      DistributionConfig:
+        DefaultCacheBehavior:
+          AllowedMethods:
+            - GET
+            - HEAD
+          CachePolicyId: !Ref CachePolicy26D8A535
+          Compress: true
+          TargetOriginId: VideoOnDemandCloudFrontToS3CloudFrontDistributionOrigin1CC6EEFFD
+          ViewerProtocolPolicy: redirect-to-https
+        DefaultRootObject: index.html
+        Enabled: true
+        HttpVersion: http2
+        IPV6Enabled: true
+        Logging:
+          Bucket: !GetAtt 
+            - Logs6819BB44
+            - RegionalDomainName
+          Prefix: cloudfront-logs/
+        Origins:
+          - DomainName: !GetAtt 
+              - Destination920A3C57
+              - RegionalDomainName
+            Id: VideoOnDemandCloudFrontToS3CloudFrontDistributionOrigin1CC6EEFFD
+            S3OriginConfig:
+              OriginAccessIdentity: !Join 
+                - ''
+                - - origin-access-identity/cloudfront/
+                  - !Ref CloudFrontToS3CloudFrontDistributionOrigin1S3OriginB0637B8F
+        PriceClass: PriceClass_100
+      Tags:
+        - Key: SolutionId
+          Value: SO0021
+    Metadata:
+      'aws:cdk:path': VideoOnDemand/CloudFrontToS3/CloudFrontDistribution/Resource
+      cfn_nag:
+        rules_to_suppress:
+          - id: W70
+            reason: >-
+              Since the distribution uses the CloudFront domain name, CloudFront
+              automatically sets the security policy to TLSv1 regardless of the
+              value of MinimumProtocolVersion
+      cdk_nag:
+        rules_to_suppress:
+          - reason: Use case does not warrant CloudFront Geo restriction
+            id: AwsSolutions-CFR1
+          - reason: Use case does not warrant CloudFront integration with AWS WAF
+            id: AwsSolutions-CFR2
+          - reason: >-
+              CloudFront automatically sets the security policy to TLSv1 when
+              the distribution uses the CloudFront domain name
+            id: AwsSolutions-CFR4
+  CustomResourceRoleAB1EF463:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action: 'sts:AssumeRole'
+            Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+        Version: 2012-10-17
+      Tags:
+        - Key: SolutionId
+          Value: SO0021
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W11
+            reason: >-
+              * is required to create CloudWatch logs and interact with
+              MediaConvert / MediaPackage actions that do not support resource
+              level permissions
+          - id: W76
+            reason: All policies are required by the custom resource.
+  CustomResourcePolicy79526710:
+    Type: 'AWS::IAM::Policy'
+    Properties:
+      PolicyDocument:
+        Statement:
+          - Action:
+              - 'logs:CreateLogGroup'
+              - 'logs:CreateLogStream'
+              - 'logs:PutLogEvents'
+            Effect: Allow
+            Resource: !Join 
+              - ''
+              - - 'arn:'
+                - !Ref 'AWS::Partition'
+                - ':logs:'
+                - !Ref 'AWS::Region'
+                - ':'
+                - !Ref 'AWS::AccountId'
+                - ':log-group:/aws/lambda/*'
+          - Action:
+              - 's3:PutBucketNotification'
+              - 's3:PutObject'
+              - 's3:PutObjectAcl'
+            Effect: Allow
+            Resource: !GetAtt 
+              - Source71E471F1
+              - Arn
+          - Action:
+              - 'mediaconvert:CreatePreset'
+              - 'mediaconvert:CreateJobTemplate'
+              - 'mediaconvert:DeletePreset'
+              - 'mediaconvert:DeleteJobTemplate'
+              - 'mediaconvert:DescribeEndpoints'
+              - 'mediaconvert:ListJobTemplates'
+              - 'mediaconvert:TagResource'
+              - 'mediaconvert:UntagResource'
+            Effect: Allow
+            Resource: !Join 
+              - ''
+              - - 'arn:'
+                - !Ref 'AWS::Partition'
+                - ':mediaconvert:'
+                - !Ref 'AWS::Region'
+                - ':'
+                - !Ref 'AWS::AccountId'
+                - ':*'
+          - Action:
+              - 'mediapackage-vod:DeleteAsset'
+              - 'mediapackage-vod:DeletePackagingConfiguration'
+            Effect: Allow
+            Resource:
+              - !Join 
+                - ''
+                - - 'arn:'
+                  - !Ref 'AWS::Partition'
+                  - ':mediapackage-vod:'
+                  - !Ref 'AWS::Region'
+                  - ':'
+                  - !Ref 'AWS::AccountId'
+                  - ':assets/*'
+              - !Join 
+                - ''
+                - - 'arn:'
+                  - !Ref 'AWS::Partition'
+                  - ':mediapackage-vod:'
+                  - !Ref 'AWS::Region'
+                  - ':'
+                  - !Ref 'AWS::AccountId'
+                  - ':packaging-configurations/packaging-config-*'
+          - Action:
+              - 'mediapackage-vod:DescribePackagingGroup'
+              - 'mediapackage-vod:DeletePackagingGroup'
+            Effect: Allow
+            Resource: !Join 
+              - ''
+              - - 'arn:'
+                - !Ref 'AWS::Partition'
+                - ':mediapackage-vod:'
+                - !Ref 'AWS::Region'
+                - ':'
+                - !Ref 'AWS::AccountId'
+                - ':packaging-groups/'
+                - !Ref 'AWS::StackName'
+                - '-packaging-group'
+          - Action:
+              - 'mediapackage-vod:CreatePackagingConfiguration'
+              - 'mediapackage-vod:CreatePackagingGroup'
+              - 'mediapackage-vod:ListAssets'
+              - 'mediapackage-vod:ListPackagingConfigurations'
+              - 'mediapackage-vod:ListPackagingGroups'
+              - 'mediapackage-vod:TagResource'
+              - 'mediapackage-vod:UntagResource'
+            Effect: Allow
+            Resource: '*'
+          - Action:
+              - 'cloudfront:GetDistributionConfig'
+              - 'cloudfront:UpdateDistribution'
+            Effect: Allow
+            Resource: !Join 
+              - ''
+              - - 'arn:'
+                - !Ref 'AWS::Partition'
+                - ':cloudfront::'
+                - !Ref 'AWS::AccountId'
+                - ':distribution/'
+                - !Ref CloudFrontToS3CloudFrontDistribution241D9866
+        Version: 2012-10-17
+      PolicyName: CustomResourcePolicy79526710
+      Roles:
+        - !Ref CustomResourceRoleAB1EF463
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W12
+            reason: >-
+              * is required to create CloudWatch logs and interact with
+              MediaConvert / MediaPackage actions that do not support resource
+              level permissions
+          - id: W76
+            reason: >-
+              High complexity due to number of policy statements needed for
+              creating all custom resources
+      cdk_nag:
+        rules_to_suppress:
+          - reason: Resource ARNs are not generated at the time of policy creation
+            id: AwsSolutions-IAM5
+  CustomResource8CDCD7A7:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Code:
+        S3Bucket: !Sub 'solutions-${AWS::Region}'
+        S3Key: >-
+          video-on-demand-on-aws/v6.1.2/assetbc39fc3e51242b64d3a63960209e7b360324b699c58ab21016e48a5cda92dfdd.zip
+      Role: !GetAtt 
+        - CustomResourceRoleAB1EF463
+        - Arn
+      Description: Used to deploy resources not supported by CloudFormation
+      Environment:
+        Variables:
+          SOLUTION_IDENTIFIER: AwsSolution/SO0021/v6.1.2
+      FunctionName: !Join 
+        - ''
+        - - !Ref 'AWS::StackName'
+          - '-custom-resource'
+      Handler: index.handler
+      Runtime: nodejs16.x
+      Tags:
+        - Key: SolutionId
+          Value: SO0021
+      Timeout: 30
+    DependsOn:
+      - CustomResourcePolicy79526710
+      - CustomResourceRoleAB1EF463
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W58
+            reason: 'Invalid warning: function has access to cloudwatch'
+          - id: W89
+            reason: This CustomResource does not need to be deployed inside a VPC
+          - id: W92
+            reason: >-
+              This CustomResource does not need to define
+              ReservedConcurrentExecutions to reserve simultaneous executions
+  MediaConvertEndPoint:
+    Type: 'AWS::CloudFormation::CustomResource'
+    Properties:
+      ServiceToken: !GetAtt 
+        - CustomResource8CDCD7A7
+        - Arn
+      Resource: EndPoint
+    UpdateReplacePolicy: Delete
+    DeletionPolicy: Delete
+    Metadata:
+      'aws:cdk:path': VideoOnDemand/MediaConvertEndPoint/Default
+  MediaConvertTemplates:
+    Type: 'AWS::CloudFormation::CustomResource'
+    Properties:
+      ServiceToken: !GetAtt 
+        - CustomResource8CDCD7A7
+        - Arn
+      Resource: MediaConvertTemplates
+      StackName: !Ref 'AWS::StackName'
+      EndPoint: !GetAtt 
+        - MediaConvertEndPoint
+        - EndpointUrl
+      EnableMediaPackage: !If 
+        - EnableMediaPackageCondition
+        - 'true'
+        - 'false'
+      EnableNewTemplates: true
+    UpdateReplacePolicy: Delete
+    DeletionPolicy: Delete
+    Metadata:
+      'aws:cdk:path': VideoOnDemand/MediaConvertTemplates/Default
+  MediaPackageVod:
+    Type: 'AWS::CloudFormation::CustomResource'
+    Properties:
+      ServiceToken: !GetAtt 
+        - CustomResource8CDCD7A7
+        - Arn
+      Resource: MediaPackageVod
+      StackName: !Ref 'AWS::StackName'
+      GroupId: !Join 
+        - ''
+        - - !Ref 'AWS::StackName'
+          - '-packaging-group'
+      PackagingConfigurations: 'HLS,DASH,MSS,CMAF'
+      DistributionId: !Ref CloudFrontToS3CloudFrontDistribution241D9866
+      EnableMediaPackage: !If 
+        - EnableMediaPackageCondition
+        - 'true'
+        - 'false'
+    UpdateReplacePolicy: Delete
+    DeletionPolicy: Delete
+    Metadata:
+      'aws:cdk:path': VideoOnDemand/MediaPackageVod/Default
+  MediaConvertRole031A64A9:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action: 'sts:AssumeRole'
+            Effect: Allow
+            Principal:
+              Service: mediaconvert.amazonaws.com
+        Version: 2012-10-17
+      Tags:
+        - Key: SolutionId
+          Value: SO0021
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W11
+            reason: /* required to get/put objects to S3
+  MediaConvertPolicy91CC58C0:
+    Type: 'AWS::IAM::Policy'
+    Properties:
+      PolicyDocument:
+        Statement:
+          - Action:
+              - 's3:GetObject'
+              - 's3:PutObject'
+            Effect: Allow
+            Resource:
+              - !Join 
+                - ''
+                - - !GetAtt 
+                    - Source71E471F1
+                    - Arn
+                  - /*
+              - !Join 
+                - ''
+                - - !GetAtt 
+                    - Destination920A3C57
+                    - Arn
+                  - /*
+          - Action: 'execute-api:Invoke'
+            Effect: Allow
+            Resource: !Join 
+              - ''
+              - - 'arn:'
+                - !Ref 'AWS::Partition'
+                - ':execute-api:'
+                - !Ref 'AWS::Region'
+                - ':'
+                - !Ref 'AWS::AccountId'
+                - ':*'
+        Version: 2012-10-17
+      PolicyName: !Join 
+        - ''
+        - - !Ref 'AWS::StackName'
+          - '-mediatranscode-policy'
+      Roles:
+        - !Ref MediaConvertRole031A64A9
+    Metadata:
+      'aws:cdk:path': VideoOnDemand/MediaConvertPolicy/Resource
+      cdk_nag:
+        rules_to_suppress:
+          - reason: /* required to get/put objects to S3
+            id: AwsSolutions-IAM5
+  MediaPackageVodRole931E8163:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action: 'sts:AssumeRole'
+            Effect: Allow
+            Principal:
+              Service: mediapackage.amazonaws.com
+        Version: 2012-10-17
+      Tags:
+        - Key: SolutionId
+          Value: SO0021
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W11
+            reason: '* is required to get objects from S3'
+  MediaPackageVodPolicy1DC9ECF2:
+    Type: 'AWS::IAM::Policy'
+    Properties:
+      PolicyDocument:
+        Statement:
+          - Action:
+              - 's3:GetObject'
+              - 's3:GetBucketLocation'
+              - 's3:GetBucketRequestPayment'
+            Effect: Allow
+            Resource:
+              - !GetAtt 
+                - Destination920A3C57
+                - Arn
+              - !Join 
+                - ''
+                - - !GetAtt 
+                    - Destination920A3C57
+                    - Arn
+                  - /*
+        Version: 2012-10-17
+      PolicyName: !Join 
+        - ''
+        - - !Ref 'AWS::StackName'
+          - '-mediapackagevod-policy'
+      Roles:
+        - !Ref MediaPackageVodRole931E8163
+    Metadata:
+      'aws:cdk:path': VideoOnDemand/MediaPackageVodPolicy/Resource
+      cdk_nag:
+        rules_to_suppress:
+          - reason: /* required to get/put objects to S3
+            id: AwsSolutions-IAM5
+  SnsTopic2C1570A4:
+    Type: 'AWS::SNS::Topic'
+    Properties:
+      DisplayName: !Join 
+        - ''
+        - - !Ref 'AWS::StackName'
+          - '-Notifications'
+      KmsMasterKeyId: alias/aws/sns
+      Tags:
+        - Key: SolutionId
+          Value: SO0021
+    Metadata:
+      'aws:cdk:path': VideoOnDemand/SnsTopic/Resource
+  SnsTopicTokenSubscription1D5A46B4F:
+    Type: 'AWS::SNS::Subscription'
+    Properties:
+      Protocol: email
+      TopicArn: !Ref SnsTopic2C1570A4
+      Endpoint: !Ref AdminEmail
+    Metadata:
+      'aws:cdk:path': 'VideoOnDemand/SnsTopic/TokenSubscription:1/Resource'
+  SqsQueueDlqFD591F76:
+    Type: 'AWS::SQS::Queue'
+    Properties:
+      KmsDataKeyReusePeriodSeconds: 300
+      KmsMasterKeyId: alias/aws/sqs
+      QueueName: !Join 
+        - ''
+        - - !Ref 'AWS::StackName'
+          - '-dlq'
+      Tags:
+        - Key: SolutionId
+          Value: SO0021
+      VisibilityTimeout: 120
+    UpdateReplacePolicy: Delete
+    DeletionPolicy: Delete
+    Metadata:
+      'aws:cdk:path': VideoOnDemand/SqsQueueDlq/Resource
+      cdk_nag:
+        rules_to_suppress:
+          - reason: This resource is a DLQ
+            id: AwsSolutions-SQS3
+  SqsQueueDlqPolicy601D5F1E:
+    Type: 'AWS::SQS::QueuePolicy'
+    Properties:
+      PolicyDocument:
+        Statement:
+          - Action: 'sqs:*'
+            Condition:
+              Bool:
+                'aws:SecureTransport': 'false'
+            Effect: Deny
+            Principal:
+              AWS: '*'
+            Resource: !GetAtt 
+              - SqsQueueDlqFD591F76
+              - Arn
+        Version: 2012-10-17
+      Queues:
+        - !Ref SqsQueueDlqFD591F76
+    Metadata:
+      'aws:cdk:path': VideoOnDemand/SqsQueueDlq/Policy/Resource
+  SqsQueue13597403:
+    Type: 'AWS::SQS::Queue'
+    Properties:
+      KmsDataKeyReusePeriodSeconds: 300
+      KmsMasterKeyId: alias/aws/sqs
+      QueueName: !Ref 'AWS::StackName'
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt 
+          - SqsQueueDlqFD591F76
+          - Arn
+        maxReceiveCount: 1
+      Tags:
+        - Key: SolutionId
+          Value: SO0021
+      VisibilityTimeout: 120
+    UpdateReplacePolicy: Delete
+    DeletionPolicy: Delete
+    Metadata:
+      'aws:cdk:path': VideoOnDemand/SqsQueue/Resource
+  SqsQueuePolicy24A842E9:
+    Type: 'AWS::SQS::QueuePolicy'
+    Properties:
+      PolicyDocument:
+        Statement:
+          - Action: 'sqs:*'
+            Condition:
+              Bool:
+                'aws:SecureTransport': 'false'
+            Effect: Deny
+            Principal:
+              AWS: '*'
+            Resource: !GetAtt 
+              - SqsQueue13597403
+              - Arn
+        Version: 2012-10-17
+      Queues:
+        - !Ref SqsQueue13597403
+    Metadata:
+      'aws:cdk:path': VideoOnDemand/SqsQueue/Policy/Resource
+  DynamoDBTable59784FC0:
+    Type: 'AWS::DynamoDB::Table'
+    Properties:
+      KeySchema:
+        - AttributeName: guid
+          KeyType: HASH
+      AttributeDefinitions:
+        - AttributeName: guid
+          AttributeType: S
+        - AttributeName: srcBucket
+          AttributeType: S
+        - AttributeName: startTime
+          AttributeType: S
+      BillingMode: PAY_PER_REQUEST
+      GlobalSecondaryIndexes:
+        - IndexName: srcBucket-startTime-index
+          KeySchema:
+            - AttributeName: srcBucket
+              KeyType: HASH
+            - AttributeName: startTime
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      TableName: !Ref 'AWS::StackName'
+      Tags:
+        - Key: SolutionId
+          Value: SO0021
+    UpdateReplacePolicy: Retain
+    DeletionPolicy: Retain
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W28
+            reason: Table name is set to the stack name
+          - id: W74
+            reason: The DynamoDB table is configured to use the default encryption
+  ErrorHandlerRole361CFEB7:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action: 'sts:AssumeRole'
+            Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+        Version: 2012-10-17
+      Tags:
+        - Key: SolutionId
+          Value: SO0021
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W11
+            reason: '* is used so that the Lambda function can create log groups'
+  ErrorHandlerPolicyF920541C:
+    Type: 'AWS::IAM::Policy'
+    Properties:
+      PolicyDocument:
+        Statement:
+          - Action: 'sns:Publish'
+            Condition:
+              Bool:
+                'aws:SecureTransport': 'true'
+            Effect: Allow
+            Resource: !Ref SnsTopic2C1570A4
+          - Action: 'dynamodb:UpdateItem'
+            Effect: Allow
+            Resource: !GetAtt 
+              - DynamoDBTable59784FC0
+              - Arn
+          - Action:
+              - 'logs:CreateLogGroup'
+              - 'logs:CreateLogStream'
+              - 'logs:PutLogEvents'
+            Effect: Allow
+            Resource: !Join 
+              - ''
+              - - 'arn:'
+                - !Ref 'AWS::Partition'
+                - ':logs:'
+                - !Ref 'AWS::Region'
+                - ':'
+                - !Ref 'AWS::AccountId'
+                - ':log-group:/aws/lambda/*'
+        Version: 2012-10-17
+      PolicyName: !Join 
+        - ''
+        - - !Ref 'AWS::StackName'
+          - '-error-handler-role'
+      Roles:
+        - !Ref ErrorHandlerRole361CFEB7
+    Metadata:
+      'aws:cdk:path': VideoOnDemand/ErrorHandlerPolicy/Resource
+      cdk_nag:
+        rules_to_suppress:
+          - reason: '* is used so that the Lambda function can create log groups'
+            id: AwsSolutions-IAM5
+  ErrorHandlerLambdaFC10367C:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Code:
+        S3Bucket: !Sub 'solutions-${AWS::Region}'
+        S3Key: >-
+          video-on-demand-on-aws/v6.1.2/assetbd6ab3da5b28f8919acbe9915fc35d6c1cfe3f41054aedeb6f7aec68d684e9b9.zip
+      Role: !GetAtt 
+        - ErrorHandlerRole361CFEB7
+        - Arn
+      Description: Captures and processes workflow errors
+      Environment:
+        Variables:
+          SOLUTION_IDENTIFIER: AwsSolution/SO0021/v6.1.2
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: '1'
+          DynamoDBTable: !Ref DynamoDBTable59784FC0
+          SnsTopic: !Ref SnsTopic2C1570A4
+      FunctionName: !Join 
+        - ''
+        - - !Ref 'AWS::StackName'
+          - '-error-handler'
+      Handler: index.handler
+      Runtime: nodejs16.x
+      Tags:
+        - Key: SolutionId
+          Value: SO0021
+      Timeout: 120
+    DependsOn:
+      - ErrorHandlerPolicyF920541C
+      - ErrorHandlerRole361CFEB7
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W58
+            reason: 'Invalid warning: function has access to cloudwatch'
+          - id: W89
+            reason: This resource does not need to be deployed inside a VPC
+          - id: W92
+            reason: >-
+              This resource does not need to define ReservedConcurrentExecutions
+              to reserve simultaneous executions
+  ErrorHandlerLambdaCloudWatchLambdaInvokeErrors73673741:
+    Type: 'AWS::Lambda::Permission'
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      FunctionName: !GetAtt 
+        - ErrorHandlerLambdaFC10367C
+        - Arn
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt 
+        - EncodeErrorRule4CB53BA6
+        - Arn
+    DependsOn:
+      - ErrorHandlerPolicyF920541C
+      - ErrorHandlerRole361CFEB7
+    Metadata:
+      'aws:cdk:path': VideoOnDemand/ErrorHandlerLambda/CloudWatchLambdaInvokeErrors
+  EncodeErrorRule4CB53BA6:
+    Type: 'AWS::Events::Rule'
+    Properties:
+      Description: MediaConvert Error event rule
+      EventPattern:
+        source:
+          - aws.mediaconvert
+        detail:
+          status:
+            - ERROR
+          userMetadata:
+            workflow:
+              - !Ref 'AWS::StackName'
+      Name: !Join 
+        - ''
+        - - !Ref 'AWS::StackName'
+          - '-EncodeError'
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt 
+            - ErrorHandlerLambdaFC10367C
+            - Arn
+          Id: Target0
+    Metadata:
+      'aws:cdk:path': VideoOnDemand/EncodeErrorRule/Resource
+  EncodeErrorRuleAllowEventRuleVideoOnDemandErrorHandlerLambda7A429D30DEEF909F:
+    Type: 'AWS::Lambda::Permission'
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      FunctionName: !GetAtt 
+        - ErrorHandlerLambdaFC10367C
+        - Arn
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt 
+        - EncodeErrorRule4CB53BA6
+        - Arn
+    Metadata:
+      'aws:cdk:path': >-
+        VideoOnDemand/EncodeErrorRule/AllowEventRuleVideoOnDemandErrorHandlerLambda7A429D30
+  InputValidateRole862FC6A2:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action: 'sts:AssumeRole'
+            Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+        Version: 2012-10-17
+      Tags:
+        - Key: SolutionId
+          Value: SO0021
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W11
+            reason: '* is used so that the Lambda function can create log groups'
+  InputValidatePolicyAC31247E:
+    Type: 'AWS::IAM::Policy'
+    Properties:
+      PolicyDocument:
+        Statement:
+          - Action: 's3:GetObject'
+            Effect: Allow
+            Resource: !Join 
+              - ''
+              - - !GetAtt 
+                  - Source71E471F1
+                  - Arn
+                - /*
+          - Action: 'lambda:InvokeFunction'
+            Effect: Allow
+            Resource: !GetAtt 
+              - ErrorHandlerLambdaFC10367C
+              - Arn
+          - Action:
+              - 'logs:CreateLogGroup'
+              - 'logs:CreateLogStream'
+              - 'logs:PutLogEvents'
+            Effect: Allow
+            Resource: !Join 
+              - ''
+              - - 'arn:'
+                - !Ref 'AWS::Partition'
+                - ':logs:'
+                - !Ref 'AWS::Region'
+                - ':'
+                - !Ref 'AWS::AccountId'
+                - ':log-group:/aws/lambda/*'
+        Version: 2012-10-17
+      PolicyName: !Join 
+        - ''
+        - - !Ref 'AWS::StackName'
+          - '-input-validate-role'
+      Roles:
+        - !Ref InputValidateRole862FC6A2
+    Metadata:
+      'aws:cdk:path': VideoOnDemand/InputValidatePolicy/Resource
+      cdk_nag:
+        rules_to_suppress:
+          - reason: '* is used so that the Lambda function can create log groups'
+            id: AwsSolutions-IAM5
+  InputValidateLambdaA739FF97:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Code:
+        S3Bucket: !Sub 'solutions-${AWS::Region}'
+        S3Key: >-
+          video-on-demand-on-aws/v6.1.2/asset22561f12c129679f665304716f7699560ddbd4ef0afa8bdfc4b0e0a5d2d1a617.zip
+      Role: !GetAtt 
+        - InputValidateRole862FC6A2
+        - Arn
+      Description: Validates the input given to the workflow
+      Environment:
+        Variables:
+          SOLUTION_IDENTIFIER: AwsSolution/SO0021/v6.1.2
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: '1'
+          ErrorHandler: !GetAtt 
+            - ErrorHandlerLambdaFC10367C
+            - Arn
+          WorkflowName: !Ref 'AWS::StackName'
+          Source: !Ref Source71E471F1
+          Destination: !Ref Destination920A3C57
+          FrameCapture: !If 
+            - FrameCaptureCondition
+            - 'true'
+            - 'false'
+          ArchiveSource: !Ref Glacier
+          MediaConvert_Template_2160p: !If 
+            - EnableMediaPackageCondition
+            - !Join 
+              - ''
+              - - !Ref 'AWS::StackName'
+                - _Ott_2160p_Avc_Aac_16x9_mvod_no_preset
+            - !Join 
+              - ''
+              - - !Ref 'AWS::StackName'
+                - _Ott_2160p_Avc_Aac_16x9_qvbr_no_preset
+          MediaConvert_Template_1080p: !If 
+            - EnableMediaPackageCondition
+            - !Join 
+              - ''
+              - - !Ref 'AWS::StackName'
+                - _Ott_1080p_Avc_Aac_16x9_mvod_no_preset
+            - !Join 
+              - ''
+              - - !Ref 'AWS::StackName'
+                - _Ott_1080p_Avc_Aac_16x9_qvbr_no_preset
+          MediaConvert_Template_720p: !If 
+            - EnableMediaPackageCondition
+            - !Join 
+              - ''
+              - - !Ref 'AWS::StackName'
+                - _Ott_720p_Avc_Aac_16x9_mvod_no_preset
+            - !Join 
+              - ''
+              - - !Ref 'AWS::StackName'
+                - _Ott_720p_Avc_Aac_16x9_qvbr_no_preset
+          CloudFront: !GetAtt 
+            - CloudFrontToS3CloudFrontDistribution241D9866
+            - DomainName
+          EnableMediaPackage: !If 
+            - EnableMediaPackageCondition
+            - 'true'
+            - 'false'
+          InputRotate: DEGREE_0
+          EnableSns: !If 
+            - EnableSnsCondition
+            - 'true'
+            - 'false'
+          EnableSqs: !If 
+            - EnableSqsCondition
+            - 'true'
+            - 'false'
+          AcceleratedTranscoding: !Ref AcceleratedTranscoding
+      FunctionName: !Join 
+        - ''
+        - - !Ref 'AWS::StackName'
+          - '-input-validate'
+      Handler: index.handler
+      Runtime: nodejs16.x
+      Tags:
+        - Key: SolutionId
+          Value: SO0021
+      Timeout: 120
+    DependsOn:
+      - InputValidatePolicyAC31247E
+      - InputValidateRole862FC6A2
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W89
+            reason: Lambda functions do not need a VPC
+          - id: W92
+            reason: Lambda do not need ReservedConcurrentExecutions in this case
+          - id: W58
+            reason: 'Invalid warning: function has access to cloudwatch'
+  MediaInfoRole16C46683:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action: 'sts:AssumeRole'
+            Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+        Version: 2012-10-17
+      Tags:
+        - Key: SolutionId
+          Value: SO0021
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W11
+            reason: '* is used so that the Lambda function can create log groups'
+  MediaInfoPolicy1D8C0D8D:
+    Type: 'AWS::IAM::Policy'
+    Properties:
+      PolicyDocument:
+        Statement:
+          - Action: 's3:GetObject'
+            Effect: Allow
+            Resource: !Join 
+              - ''
+              - - !GetAtt 
+                  - Source71E471F1
+                  - Arn
+                - /*
+          - Action: 'lambda:InvokeFunction'
+            Effect: Allow
+            Resource: !GetAtt 
+              - ErrorHandlerLambdaFC10367C
+              - Arn
+          - Action:
+              - 'logs:CreateLogGroup'
+              - 'logs:CreateLogStream'
+              - 'logs:PutLogEvents'
+            Effect: Allow
+            Resource: !Join 
+              - ''
+              - - 'arn:'
+                - !Ref 'AWS::Partition'
+                - ':logs:'
+                - !Ref 'AWS::Region'
+                - ':'
+                - !Ref 'AWS::AccountId'
+                - ':log-group:/aws/lambda/*'
+        Version: 2012-10-17
+      PolicyName: !Join 
+        - ''
+        - - !Ref 'AWS::StackName'
+          - '-mediainfo-role'
+      Roles:
+        - !Ref MediaInfoRole16C46683
+    Metadata:
+      'aws:cdk:path': VideoOnDemand/MediaInfoPolicy/Resource
+      cdk_nag:
+        rules_to_suppress:
+          - reason: '* is used so that the Lambda function can create log groups'
+            id: AwsSolutions-IAM5
+  MediaInfoLambda172F634B:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Code:
+        S3Bucket: !Sub 'solutions-${AWS::Region}'
+        S3Key: >-
+          video-on-demand-on-aws/v6.1.2/asset3abd736e37198290a9bb0464388f55c7b113635bd93bb27da27322bc7ab2813c.zip
+      Role: !GetAtt 
+        - MediaInfoRole16C46683
+        - Arn
+      Description: Runs mediainfo on a pre-signed S3 URL
+      Environment:
+        Variables:
+          SOLUTION_IDENTIFIER: AwsSolution/SO0021/v6.1.2
+          ErrorHandler: !GetAtt 
+            - ErrorHandlerLambdaFC10367C
+            - Arn
+      FunctionName: !Join 
+        - ''
+        - - !Ref 'AWS::StackName'
+          - '-mediainfo'
+      Handler: lambda_function.lambda_handler
+      Runtime: python3.9
+      Tags:
+        - Key: SolutionId
+          Value: SO0021
+      Timeout: 120
+    DependsOn:
+      - MediaInfoPolicy1D8C0D8D
+      - MediaInfoRole16C46683
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W89
+            reason: Lambda functions do not need a VPC
+          - id: W92
+            reason: Lambda do not need ReservedConcurrentExecutions in this case
+          - id: W58
+            reason: 'Invalid warning: function has access to cloudwatch'
+  DynamoUpdateRoleB73E97DD:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action: 'sts:AssumeRole'
+            Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+        Version: 2012-10-17
+      Tags:
+        - Key: SolutionId
+          Value: SO0021
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W11
+            reason: '* is used so that the Lambda function can create log groups'
+  DynamoUpdatePolicy7828BC4E:
+    Type: 'AWS::IAM::Policy'
+    Properties:
+      PolicyDocument:
+        Statement:
+          - Action: 'dynamodb:UpdateItem'
+            Effect: Allow
+            Resource: !GetAtt 
+              - DynamoDBTable59784FC0
+              - Arn
+          - Action: 'lambda:InvokeFunction'
+            Effect: Allow
+            Resource: !GetAtt 
+              - ErrorHandlerLambdaFC10367C
+              - Arn
+          - Action:
+              - 'logs:CreateLogGroup'
+              - 'logs:CreateLogStream'
+              - 'logs:PutLogEvents'
+            Effect: Allow
+            Resource: !Join 
+              - ''
+              - - 'arn:'
+                - !Ref 'AWS::Partition'
+                - ':logs:'
+                - !Ref 'AWS::Region'
+                - ':'
+                - !Ref 'AWS::AccountId'
+                - ':log-group:/aws/lambda/*'
+        Version: 2012-10-17
+      PolicyName: !Join 
+        - ''
+        - - !Ref 'AWS::StackName'
+          - '-dynamo-role'
+      Roles:
+        - !Ref DynamoUpdateRoleB73E97DD
+    Metadata:
+      'aws:cdk:path': VideoOnDemand/DynamoUpdatePolicy/Resource
+      cdk_nag:
+        rules_to_suppress:
+          - reason: '* is used so that the Lambda function can create log groups'
+            id: AwsSolutions-IAM5
+  DynamoUpdateLambda0DF14C26:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Code:
+        S3Bucket: !Sub 'solutions-${AWS::Region}'
+        S3Key: >-
+          video-on-demand-on-aws/v6.1.2/asset1d0fb063f8f7bf0af9deeb2de47cd2486dcd2ab493717a44b24f1999f5bde52a.zip
+      Role: !GetAtt 
+        - DynamoUpdateRoleB73E97DD
+        - Arn
+      Description: Updates DynamoDB with event data
+      Environment:
+        Variables:
+          SOLUTION_IDENTIFIER: AwsSolution/SO0021/v6.1.2
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: '1'
+          ErrorHandler: !GetAtt 
+            - ErrorHandlerLambdaFC10367C
+            - Arn
+          DynamoDBTable: !Ref DynamoDBTable59784FC0
+      FunctionName: !Join 
+        - ''
+        - - !Ref 'AWS::StackName'
+          - '-dynamo'
+      Handler: index.handler
+      Runtime: nodejs16.x
+      Tags:
+        - Key: SolutionId
+          Value: SO0021
+      Timeout: 120
+    DependsOn:
+      - DynamoUpdatePolicy7828BC4E
+      - DynamoUpdateRoleB73E97DD
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W89
+            reason: Lambda functions do not need a VPC
+          - id: W92
+            reason: Lambda do not need ReservedConcurrentExecutions in this case
+          - id: W58
+            reason: 'Invalid warning: function has access to cloudwatch'
+  ProfilerRole5E433579:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action: 'sts:AssumeRole'
+            Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+        Version: 2012-10-17
+      Tags:
+        - Key: SolutionId
+          Value: SO0021
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W11
+            reason: '* is used so that the Lambda function can create log groups'
+  ProfilerPolicy71C838D4:
+    Type: 'AWS::IAM::Policy'
+    Properties:
+      PolicyDocument:
+        Statement:
+          - Action: 'dynamodb:GetItem'
+            Effect: Allow
+            Resource: !GetAtt 
+              - DynamoDBTable59784FC0
+              - Arn
+          - Action: 'lambda:InvokeFunction'
+            Effect: Allow
+            Resource: !GetAtt 
+              - ErrorHandlerLambdaFC10367C
+              - Arn
+          - Action:
+              - 'logs:CreateLogGroup'
+              - 'logs:CreateLogStream'
+              - 'logs:PutLogEvents'
+            Effect: Allow
+            Resource: !Join 
+              - ''
+              - - 'arn:'
+                - !Ref 'AWS::Partition'
+                - ':logs:'
+                - !Ref 'AWS::Region'
+                - ':'
+                - !Ref 'AWS::AccountId'
+                - ':log-group:/aws/lambda/*'
+        Version: 2012-10-17
+      PolicyName: !Join 
+        - ''
+        - - !Ref 'AWS::StackName'
+          - '-profiler-role'
+      Roles:
+        - !Ref ProfilerRole5E433579
+    Metadata:
+      'aws:cdk:path': VideoOnDemand/ProfilerPolicy/Resource
+      cdk_nag:
+        rules_to_suppress:
+          - reason: '* is used so that the Lambda function can create log groups'
+            id: AwsSolutions-IAM5
+  ProfilerLambdaFAFF7893:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Code:
+        S3Bucket: !Sub 'solutions-${AWS::Region}'
+        S3Key: >-
+          video-on-demand-on-aws/v6.1.2/asset910725d5f06b7baf231195e5360950dbf57b7b53551cdf09c884a3767b297321.zip
+      Role: !GetAtt 
+        - ProfilerRole5E433579
+        - Arn
+      Description: Sets an EncodeProfile based on mediainfo output
+      Environment:
+        Variables:
+          SOLUTION_IDENTIFIER: AwsSolution/SO0021/v6.1.2
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: '1'
+          ErrorHandler: !GetAtt 
+            - ErrorHandlerLambdaFC10367C
+            - Arn
+          DynamoDBTable: !Ref DynamoDBTable59784FC0
+      FunctionName: !Join 
+        - ''
+        - - !Ref 'AWS::StackName'
+          - '-profiler'
+      Handler: index.handler
+      Runtime: nodejs16.x
+      Tags:
+        - Key: SolutionId
+          Value: SO0021
+      Timeout: 120
+    DependsOn:
+      - ProfilerPolicy71C838D4
+      - ProfilerRole5E433579
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W89
+            reason: Lambda functions do not need a VPC
+          - id: W92
+            reason: Lambda do not need ReservedConcurrentExecutions in this case
+          - id: W58
+            reason: 'Invalid warning: function has access to cloudwatch'
+  EncodeRole36198881:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action: 'sts:AssumeRole'
+            Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+        Version: 2012-10-17
+      Tags:
+        - Key: SolutionId
+          Value: SO0021
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W11
+            reason: '* is used so that the Lambda function can create log groups'
+  EncodePolicy89CB6B7C:
+    Type: 'AWS::IAM::Policy'
+    Properties:
+      PolicyDocument:
+        Statement:
+          - Action:
+              - 'mediaconvert:CreateJob'
+              - 'mediaconvert:GetJobTemplate'
+              - 'mediaconvert:TagResource'
+              - 'mediaconvert:UntagResource'
+            Effect: Allow
+            Resource: !Join 
+              - ''
+              - - 'arn:'
+                - !Ref 'AWS::Partition'
+                - ':mediaconvert:'
+                - !Ref 'AWS::Region'
+                - ':'
+                - !Ref 'AWS::AccountId'
+                - ':*'
+          - Action: 'iam:PassRole'
+            Effect: Allow
+            Resource: !GetAtt 
+              - MediaConvertRole031A64A9
+              - Arn
+          - Action: 'lambda:InvokeFunction'
+            Effect: Allow
+            Resource: !GetAtt 
+              - ErrorHandlerLambdaFC10367C
+              - Arn
+          - Action:
+              - 'logs:CreateLogGroup'
+              - 'logs:CreateLogStream'
+              - 'logs:PutLogEvents'
+            Effect: Allow
+            Resource: !Join 
+              - ''
+              - - 'arn:'
+                - !Ref 'AWS::Partition'
+                - ':logs:'
+                - !Ref 'AWS::Region'
+                - ':'
+                - !Ref 'AWS::AccountId'
+                - ':log-group:/aws/lambda/*'
+        Version: 2012-10-17
+      PolicyName: !Join 
+        - ''
+        - - !Ref 'AWS::StackName'
+          - '-encode-role'
+      Roles:
+        - !Ref EncodeRole36198881
+    Metadata:
+      'aws:cdk:path': VideoOnDemand/EncodePolicy/Resource
+      cdk_nag:
+        rules_to_suppress:
+          - reason: '* is used so that the Lambda function can create log groups'
+            id: AwsSolutions-IAM5
+  EncodeLambdaDADCB2BB:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Code:
+        S3Bucket: !Sub 'solutions-${AWS::Region}'
+        S3Key: >-
+          video-on-demand-on-aws/v6.1.2/asset92aa87af4a240e2dfad2369543e10df406b6c427489d17920b76a78634da0a4d.zip
+      Role: !GetAtt 
+        - EncodeRole36198881
+        - Arn
+      Description: Creates a MediaConvert encode job
+      Environment:
+        Variables:
+          SOLUTION_IDENTIFIER: AwsSolution/SO0021/v6.1.2
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: '1'
+          ErrorHandler: !GetAtt 
+            - ErrorHandlerLambdaFC10367C
+            - Arn
+          MediaConvertRole: !GetAtt 
+            - MediaConvertRole031A64A9
+            - Arn
+          EndPoint: !GetAtt 
+            - MediaConvertEndPoint
+            - EndpointUrl
+      FunctionName: !Join 
+        - ''
+        - - !Ref 'AWS::StackName'
+          - '-encode'
+      Handler: index.handler
+      Runtime: nodejs16.x
+      Tags:
+        - Key: SolutionId
+          Value: SO0021
+      Timeout: 120
+    DependsOn:
+      - EncodePolicy89CB6B7C
+      - EncodeRole36198881
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W89
+            reason: Lambda functions do not need a VPC
+          - id: W92
+            reason: Lambda do not need ReservedConcurrentExecutions in this case
+          - id: W58
+            reason: 'Invalid warning: function has access to cloudwatch'
+  OutputValidateRole553C8CD2:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action: 'sts:AssumeRole'
+            Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+        Version: 2012-10-17
+      Tags:
+        - Key: SolutionId
+          Value: SO0021
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W11
+            reason: '* is used so that the Lambda function can create log groups'
+  OutputValidatePolicy8D988909:
+    Type: 'AWS::IAM::Policy'
+    Properties:
+      PolicyDocument:
+        Statement:
+          - Action: 'dynamodb:GetItem'
+            Effect: Allow
+            Resource: !GetAtt 
+              - DynamoDBTable59784FC0
+              - Arn
+          - Action: 's3:ListBucket'
+            Effect: Allow
+            Resource: !GetAtt 
+              - Destination920A3C57
+              - Arn
+          - Action: 'lambda:InvokeFunction'
+            Effect: Allow
+            Resource: !GetAtt 
+              - ErrorHandlerLambdaFC10367C
+              - Arn
+          - Action:
+              - 'logs:CreateLogGroup'
+              - 'logs:CreateLogStream'
+              - 'logs:PutLogEvents'
+            Effect: Allow
+            Resource: !Join 
+              - ''
+              - - 'arn:'
+                - !Ref 'AWS::Partition'
+                - ':logs:'
+                - !Ref 'AWS::Region'
+                - ':'
+                - !Ref 'AWS::AccountId'
+                - ':log-group:/aws/lambda/*'
+        Version: 2012-10-17
+      PolicyName: !Join 
+        - ''
+        - - !Ref 'AWS::StackName'
+          - '-output-validate-role'
+      Roles:
+        - !Ref OutputValidateRole553C8CD2
+    Metadata:
+      'aws:cdk:path': VideoOnDemand/OutputValidatePolicy/Resource
+      cdk_nag:
+        rules_to_suppress:
+          - reason: '* is used so that the Lambda function can create log groups'
+            id: AwsSolutions-IAM5
+  OutputValidateLambda2645C4BB:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Code:
+        S3Bucket: !Sub 'solutions-${AWS::Region}'
+        S3Key: >-
+          video-on-demand-on-aws/v6.1.2/asset9c912b510e6ddd712cfcea82dd5865f5e165ae0103eb2e21863ef43f4419495d.zip
+      Role: !GetAtt 
+        - OutputValidateRole553C8CD2
+        - Arn
+      Description: Parses MediaConvert job output
+      Environment:
+        Variables:
+          SOLUTION_IDENTIFIER: AwsSolution/SO0021/v6.1.2
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: '1'
+          ErrorHandler: !GetAtt 
+            - ErrorHandlerLambdaFC10367C
+            - Arn
+          DynamoDBTable: !Ref DynamoDBTable59784FC0
+          EndPoint: !GetAtt 
+            - MediaConvertEndPoint
+            - EndpointUrl
+      FunctionName: !Join 
+        - ''
+        - - !Ref 'AWS::StackName'
+          - '-output-validate'
+      Handler: index.handler
+      Runtime: nodejs16.x
+      Tags:
+        - Key: SolutionId
+          Value: SO0021
+      Timeout: 120
+    DependsOn:
+      - OutputValidatePolicy8D988909
+      - OutputValidateRole553C8CD2
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W89
+            reason: Lambda functions do not need a VPC
+          - id: W92
+            reason: Lambda do not need ReservedConcurrentExecutions in this case
+          - id: W58
+            reason: 'Invalid warning: function has access to cloudwatch'
+  ArchiveSourceRole49DA53ED:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action: 'sts:AssumeRole'
+            Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+        Version: 2012-10-17
+      Tags:
+        - Key: SolutionId
+          Value: SO0021
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W11
+            reason: '* is used so that the Lambda function can create log groups'
+  ArchiveSourcePolicy1D98A4F5:
+    Type: 'AWS::IAM::Policy'
+    Properties:
+      PolicyDocument:
+        Statement:
+          - Action: 's3:PutObjectTagging'
+            Effect: Allow
+            Resource: !Join 
+              - ''
+              - - !GetAtt 
+                  - Source71E471F1
+                  - Arn
+                - /*
+          - Action: 'lambda:InvokeFunction'
+            Effect: Allow
+            Resource: !GetAtt 
+              - ErrorHandlerLambdaFC10367C
+              - Arn
+          - Action:
+              - 'logs:CreateLogGroup'
+              - 'logs:CreateLogStream'
+              - 'logs:PutLogEvents'
+            Effect: Allow
+            Resource: !Join 
+              - ''
+              - - 'arn:'
+                - !Ref 'AWS::Partition'
+                - ':logs:'
+                - !Ref 'AWS::Region'
+                - ':'
+                - !Ref 'AWS::AccountId'
+                - ':log-group:/aws/lambda/*'
+        Version: 2012-10-17
+      PolicyName: !Join 
+        - ''
+        - - !Ref 'AWS::StackName'
+          - '-archive-source-role'
+      Roles:
+        - !Ref ArchiveSourceRole49DA53ED
+    Metadata:
+      'aws:cdk:path': VideoOnDemand/ArchiveSourcePolicy/Resource
+      cdk_nag:
+        rules_to_suppress:
+          - reason: '* is used so that the Lambda function can create log groups'
+            id: AwsSolutions-IAM5
+  ArchiveSourceLambda320F09D9:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Code:
+        S3Bucket: !Sub 'solutions-${AWS::Region}'
+        S3Key: >-
+          video-on-demand-on-aws/v6.1.2/asset5c53d35b48f1c4704875470d6f7d2a2a6e3807c1cdb9a4cde34ef6700703fa44.zip
+      Role: !GetAtt 
+        - ArchiveSourceRole49DA53ED
+        - Arn
+      Description: Updates tags on source files to enable Glacier
+      Environment:
+        Variables:
+          SOLUTION_IDENTIFIER: AwsSolution/SO0021/v6.1.2
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: '1'
+          ErrorHandler: !GetAtt 
+            - ErrorHandlerLambdaFC10367C
+            - Arn
+      FunctionName: !Join 
+        - ''
+        - - !Ref 'AWS::StackName'
+          - '-archive-source'
+      Handler: index.handler
+      Runtime: nodejs16.x
+      Tags:
+        - Key: SolutionId
+          Value: SO0021
+      Timeout: 120
+    DependsOn:
+      - ArchiveSourcePolicy1D98A4F5
+      - ArchiveSourceRole49DA53ED
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W89
+            reason: Lambda functions do not need a VPC
+          - id: W92
+            reason: Lambda do not need ReservedConcurrentExecutions in this case
+          - id: W58
+            reason: 'Invalid warning: function has access to cloudwatch'
+  SqsSendMessageRole23292716:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action: 'sts:AssumeRole'
+            Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+        Version: 2012-10-17
+      Tags:
+        - Key: SolutionId
+          Value: SO0021
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W11
+            reason: '* is used so that the Lambda function can create log groups'
+  SqsSendMessagePolicy702314CC:
+    Type: 'AWS::IAM::Policy'
+    Properties:
+      PolicyDocument:
+        Statement:
+          - Action: 'sqs:SendMessage'
+            Condition:
+              Bool:
+                'aws:SecureTransport': 'true'
+            Effect: Allow
+            Resource: !GetAtt 
+              - SqsQueue13597403
+              - Arn
+          - Action: 'lambda:InvokeFunction'
+            Effect: Allow
+            Resource: !GetAtt 
+              - ErrorHandlerLambdaFC10367C
+              - Arn
+          - Action:
+              - 'logs:CreateLogGroup'
+              - 'logs:CreateLogStream'
+              - 'logs:PutLogEvents'
+            Effect: Allow
+            Resource: !Join 
+              - ''
+              - - 'arn:'
+                - !Ref 'AWS::Partition'
+                - ':logs:'
+                - !Ref 'AWS::Region'
+                - ':'
+                - !Ref 'AWS::AccountId'
+                - ':log-group:/aws/lambda/*'
+        Version: 2012-10-17
+      PolicyName: !Join 
+        - ''
+        - - !Ref 'AWS::StackName'
+          - '-sqs-publish-role'
+      Roles:
+        - !Ref SqsSendMessageRole23292716
+    Metadata:
+      'aws:cdk:path': VideoOnDemand/SqsSendMessagePolicy/Resource
+      cdk_nag:
+        rules_to_suppress:
+          - reason: '* is used so that the Lambda function can create log groups'
+            id: AwsSolutions-IAM5
+  SqsSendMessageLambda156FD22A:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Code:
+        S3Bucket: !Sub 'solutions-${AWS::Region}'
+        S3Key: >-
+          video-on-demand-on-aws/v6.1.2/asset420a23288e93373ce02822dd38773a493b87e0c360852073e265be2d0d37add4.zip
+      Role: !GetAtt 
+        - SqsSendMessageRole23292716
+        - Arn
+      Description: Publish the workflow results to an SQS queue
+      Environment:
+        Variables:
+          SOLUTION_IDENTIFIER: AwsSolution/SO0021/v6.1.2
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: '1'
+          ErrorHandler: !GetAtt 
+            - ErrorHandlerLambdaFC10367C
+            - Arn
+          SqsQueue: !Ref SqsQueue13597403
+      FunctionName: !Join 
+        - ''
+        - - !Ref 'AWS::StackName'
+          - '-sqs-publish'
+      Handler: index.handler
+      Runtime: nodejs16.x
+      Tags:
+        - Key: SolutionId
+          Value: SO0021
+      Timeout: 120
+    DependsOn:
+      - SqsSendMessagePolicy702314CC
+      - SqsSendMessageRole23292716
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W89
+            reason: Lambda functions do not need a VPC
+          - id: W92
+            reason: Lambda do not need ReservedConcurrentExecutions in this case
+          - id: W58
+            reason: 'Invalid warning: function has access to cloudwatch'
+  SnsNotificationRole48AE9F11:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action: 'sts:AssumeRole'
+            Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+        Version: 2012-10-17
+      Tags:
+        - Key: SolutionId
+          Value: SO0021
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W11
+            reason: '* is used so that the Lambda function can create log groups'
+  SnsNotificationPolicy26B12503:
+    Type: 'AWS::IAM::Policy'
+    Properties:
+      PolicyDocument:
+        Statement:
+          - Action: 'sns:Publish'
+            Condition:
+              Bool:
+                'aws:SecureTransport': 'true'
+            Effect: Allow
+            Resource: !Ref SnsTopic2C1570A4
+          - Action: 'lambda:InvokeFunction'
+            Effect: Allow
+            Resource: !GetAtt 
+              - ErrorHandlerLambdaFC10367C
+              - Arn
+          - Action:
+              - 'logs:CreateLogGroup'
+              - 'logs:CreateLogStream'
+              - 'logs:PutLogEvents'
+            Effect: Allow
+            Resource: !Join 
+              - ''
+              - - 'arn:'
+                - !Ref 'AWS::Partition'
+                - ':logs:'
+                - !Ref 'AWS::Region'
+                - ':'
+                - !Ref 'AWS::AccountId'
+                - ':log-group:/aws/lambda/*'
+        Version: 2012-10-17
+      PolicyName: !Join 
+        - ''
+        - - !Ref 'AWS::StackName'
+          - '-sns-notification-role'
+      Roles:
+        - !Ref SnsNotificationRole48AE9F11
+    Metadata:
+      'aws:cdk:path': VideoOnDemand/SnsNotificationPolicy/Resource
+      cdk_nag:
+        rules_to_suppress:
+          - reason: '* is used so that the Lambda function can create log groups'
+            id: AwsSolutions-IAM5
+  SnsNotificationLambda1EA4A474:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Code:
+        S3Bucket: !Sub 'solutions-${AWS::Region}'
+        S3Key: >-
+          video-on-demand-on-aws/v6.1.2/asset8fb7eb7ff6f465b03b328ab76a7b961cfbaa932eb105e27ffd9133156e000306.zip
+      Role: !GetAtt 
+        - SnsNotificationRole48AE9F11
+        - Arn
+      Description: Sends a notification when the encode job is completed
+      Environment:
+        Variables:
+          SOLUTION_IDENTIFIER: AwsSolution/SO0021/v6.1.2
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: '1'
+          ErrorHandler: !GetAtt 
+            - ErrorHandlerLambdaFC10367C
+            - Arn
+          SnsTopic: !Ref SnsTopic2C1570A4
+      FunctionName: !Join 
+        - ''
+        - - !Ref 'AWS::StackName'
+          - '-sns-notification'
+      Handler: index.handler
+      Runtime: nodejs16.x
+      Tags:
+        - Key: SolutionId
+          Value: SO0021
+      Timeout: 120
+    DependsOn:
+      - SnsNotificationPolicy26B12503
+      - SnsNotificationRole48AE9F11
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W89
+            reason: Lambda functions do not need a VPC
+          - id: W92
+            reason: Lambda do not need ReservedConcurrentExecutions in this case
+          - id: W58
+            reason: 'Invalid warning: function has access to cloudwatch'
+  MediaPackageAssetsRole5B26B67C:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action: 'sts:AssumeRole'
+            Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+        Version: 2012-10-17
+      Tags:
+        - Key: SolutionId
+          Value: SO0021
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W11
+            reason: '* is used so that the Lambda function can create log groups'
+  MediaPackageAssetsPolicy84101CE2:
+    Type: 'AWS::IAM::Policy'
+    Properties:
+      PolicyDocument:
+        Statement:
+          - Action: 'iam:PassRole'
+            Effect: Allow
+            Resource: !GetAtt 
+              - MediaPackageVodRole931E8163
+              - Arn
+          - Action:
+              - 'mediapackage-vod:CreateAsset'
+              - 'mediapackage-vod:TagResource'
+              - 'mediapackage-vod:UntagResource'
+            Effect: Allow
+            Resource: '*'
+          - Action: 'lambda:InvokeFunction'
+            Effect: Allow
+            Resource: !GetAtt 
+              - ErrorHandlerLambdaFC10367C
+              - Arn
+          - Action:
+              - 'logs:CreateLogGroup'
+              - 'logs:CreateLogStream'
+              - 'logs:PutLogEvents'
+            Effect: Allow
+            Resource: !Join 
+              - ''
+              - - 'arn:'
+                - !Ref 'AWS::Partition'
+                - ':logs:'
+                - !Ref 'AWS::Region'
+                - ':'
+                - !Ref 'AWS::AccountId'
+                - ':log-group:/aws/lambda/*'
+        Version: 2012-10-17
+      PolicyName: !Join 
+        - ''
+        - - !Ref 'AWS::StackName'
+          - '-media-package-assets-role'
+      Roles:
+        - !Ref MediaPackageAssetsRole5B26B67C
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W12
+            reason: '* is used so that the Lambda function can create log groups'
+      cdk_nag:
+        rules_to_suppress:
+          - reason: '* is used so that the Lambda function can create log groups'
+            id: AwsSolutions-IAM5
+  MediaPackageAssetsLambda63EB0986:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Code:
+        S3Bucket: !Sub 'solutions-${AWS::Region}'
+        S3Key: >-
+          video-on-demand-on-aws/v6.1.2/assetf03d77c90f0878fd368439602ffab5929dfd24c47e4df3915323cce255cfcd5a.zip
+      Role: !GetAtt 
+        - MediaPackageAssetsRole5B26B67C
+        - Arn
+      Description: Ingests an asset into MediaPackage-VOD
+      Environment:
+        Variables:
+          SOLUTION_IDENTIFIER: AwsSolution/SO0021/v6.1.2
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: '1'
+          ErrorHandler: !GetAtt 
+            - ErrorHandlerLambdaFC10367C
+            - Arn
+          GroupId: !GetAtt 
+            - MediaPackageVod
+            - GroupId
+          GroupDomainName: !GetAtt 
+            - MediaPackageVod
+            - GroupDomainName
+          MediaPackageVodRole: !GetAtt 
+            - MediaPackageVodRole931E8163
+            - Arn
+      FunctionName: !Join 
+        - ''
+        - - !Ref 'AWS::StackName'
+          - '-media-package-assets'
+      Handler: index.handler
+      Runtime: nodejs16.x
+      Tags:
+        - Key: SolutionId
+          Value: SO0021
+      Timeout: 120
+    DependsOn:
+      - MediaPackageAssetsPolicy84101CE2
+      - MediaPackageAssetsRole5B26B67C
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W89
+            reason: Lambda functions do not need a VPC
+          - id: W92
+            reason: Lambda do not need ReservedConcurrentExecutions in this case
+          - id: W58
+            reason: 'Invalid warning: function has access to cloudwatch'
+  StepFunctionsRole575CBBE2:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action: 'sts:AssumeRole'
+            Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+        Version: 2012-10-17
+      Tags:
+        - Key: SolutionId
+          Value: SO0021
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W11
+            reason: '* is used so that the Lambda function can create log groups'
+  StepFunctionsPolicy4DB3D133:
+    Type: 'AWS::IAM::Policy'
+    Properties:
+      PolicyDocument:
+        Statement:
+          - Action: 'states:StartExecution'
+            Effect: Allow
+            Resource:
+              - !Join 
+                - ''
+                - - 'arn:'
+                  - !Ref 'AWS::Partition'
+                  - ':states:'
+                  - !Ref 'AWS::Region'
+                  - ':'
+                  - !Ref 'AWS::AccountId'
+                  - ':stateMachine:'
+                  - !Ref 'AWS::StackName'
+                  - '-ingest'
+              - !Join 
+                - ''
+                - - 'arn:'
+                  - !Ref 'AWS::Partition'
+                  - ':states:'
+                  - !Ref 'AWS::Region'
+                  - ':'
+                  - !Ref 'AWS::AccountId'
+                  - ':stateMachine:'
+                  - !Ref 'AWS::StackName'
+                  - '-process'
+              - !Join 
+                - ''
+                - - 'arn:'
+                  - !Ref 'AWS::Partition'
+                  - ':states:'
+                  - !Ref 'AWS::Region'
+                  - ':'
+                  - !Ref 'AWS::AccountId'
+                  - ':stateMachine:'
+                  - !Ref 'AWS::StackName'
+                  - '-publish'
+          - Action: 'lambda:InvokeFunction'
+            Effect: Allow
+            Resource: !GetAtt 
+              - ErrorHandlerLambdaFC10367C
+              - Arn
+          - Action:
+              - 'logs:CreateLogGroup'
+              - 'logs:CreateLogStream'
+              - 'logs:PutLogEvents'
+            Effect: Allow
+            Resource: !Join 
+              - ''
+              - - 'arn:'
+                - !Ref 'AWS::Partition'
+                - ':logs:'
+                - !Ref 'AWS::Region'
+                - ':'
+                - !Ref 'AWS::AccountId'
+                - ':log-group:/aws/lambda/*'
+        Version: 2012-10-17
+      PolicyName: !Join 
+        - ''
+        - - !Ref 'AWS::StackName'
+          - '-step-functions-role'
+      Roles:
+        - !Ref StepFunctionsRole575CBBE2
+    Metadata:
+      'aws:cdk:path': VideoOnDemand/StepFunctionsPolicy/Resource
+      cdk_nag:
+        rules_to_suppress:
+          - reason: '* is used so that the Lambda function can create log groups'
+            id: AwsSolutions-IAM5
+  StepFunctionsLambda8B4F69C7:
+    Type: 'AWS::Lambda::Function'
+    Properties:
+      Code:
+        S3Bucket: !Sub 'solutions-${AWS::Region}'
+        S3Key: >-
+          video-on-demand-on-aws/v6.1.2/asset8fdcd40a76ab7b11bd2c015cdfc54be31420fd961ccbefbd8eb64c5b6efc335a.zip
+      Role: !GetAtt 
+        - StepFunctionsRole575CBBE2
+        - Arn
+      Description: Creates a unique identifer (GUID) and executes the Ingest StateMachine
+      Environment:
+        Variables:
+          SOLUTION_IDENTIFIER: AwsSolution/SO0021/v6.1.2
+          AWS_NODEJS_CONNECTION_REUSE_ENABLED: '1'
+          IngestWorkflow: !Join 
+            - ''
+            - - 'arn:'
+              - !Ref 'AWS::Partition'
+              - ':states:'
+              - !Ref 'AWS::Region'
+              - ':'
+              - !Ref 'AWS::AccountId'
+              - ':stateMachine:'
+              - !Ref 'AWS::StackName'
+              - '-ingest'
+          ProcessWorkflow: !Join 
+            - ''
+            - - 'arn:'
+              - !Ref 'AWS::Partition'
+              - ':states:'
+              - !Ref 'AWS::Region'
+              - ':'
+              - !Ref 'AWS::AccountId'
+              - ':stateMachine:'
+              - !Ref 'AWS::StackName'
+              - '-process'
+          PublishWorkflow: !Join 
+            - ''
+            - - 'arn:'
+              - !Ref 'AWS::Partition'
+              - ':states:'
+              - !Ref 'AWS::Region'
+              - ':'
+              - !Ref 'AWS::AccountId'
+              - ':stateMachine:'
+              - !Ref 'AWS::StackName'
+              - '-publish'
+          ErrorHandler: !GetAtt 
+            - ErrorHandlerLambdaFC10367C
+            - Arn
+      FunctionName: !Join 
+        - ''
+        - - !Ref 'AWS::StackName'
+          - '-step-functions'
+      Handler: index.handler
+      Runtime: nodejs16.x
+      Tags:
+        - Key: SolutionId
+          Value: SO0021
+      Timeout: 120
+    DependsOn:
+      - StepFunctionsPolicy4DB3D133
+      - StepFunctionsRole575CBBE2
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W58
+            reason: 'Invalid warning: function has access to cloudwatch'
+          - id: W89
+            reason: This resource does not need to be deployed inside a VPC
+          - id: W92
+            reason: >-
+              This resource does not need to define ReservedConcurrentExecutions
+              to reserve simultaneous executions
+  StepFunctionsLambdaS3LambdaInvokeVideo456192AA:
+    Type: 'AWS::Lambda::Permission'
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      FunctionName: !GetAtt 
+        - StepFunctionsLambda8B4F69C7
+        - Arn
+      Principal: s3.amazonaws.com
+      SourceAccount: !Ref 'AWS::AccountId'
+    DependsOn:
+      - StepFunctionsPolicy4DB3D133
+      - StepFunctionsRole575CBBE2
+    Metadata:
+      'aws:cdk:path': VideoOnDemand/StepFunctionsLambda/S3LambdaInvokeVideo
+  StepFunctionsLambdaCloudWatchLambdaInvokeCompletes8CE78F7D:
+    Type: 'AWS::Lambda::Permission'
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      FunctionName: !GetAtt 
+        - StepFunctionsLambda8B4F69C7
+        - Arn
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt 
+        - EncodeCompleteRuleE2F74999
+        - Arn
+    DependsOn:
+      - StepFunctionsPolicy4DB3D133
+      - StepFunctionsRole575CBBE2
+    Metadata:
+      'aws:cdk:path': VideoOnDemand/StepFunctionsLambda/CloudWatchLambdaInvokeCompletes
+  EncodeCompleteRuleE2F74999:
+    Type: 'AWS::Events::Rule'
+    Properties:
+      Description: MediaConvert Completed event rule
+      EventPattern:
+        source:
+          - aws.mediaconvert
+        detail:
+          status:
+            - COMPLETE
+          userMetadata:
+            workflow:
+              - !Ref 'AWS::StackName'
+      Name: !Join 
+        - ''
+        - - !Ref 'AWS::StackName'
+          - '-EncodeComplete'
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt 
+            - StepFunctionsLambda8B4F69C7
+            - Arn
+          Id: Target0
+    Metadata:
+      'aws:cdk:path': VideoOnDemand/EncodeCompleteRule/Resource
+  EncodeCompleteRuleAllowEventRuleVideoOnDemandStepFunctionsLambda0CB4E0F5435F3721:
+    Type: 'AWS::Lambda::Permission'
+    Properties:
+      Action: 'lambda:InvokeFunction'
+      FunctionName: !GetAtt 
+        - StepFunctionsLambda8B4F69C7
+        - Arn
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt 
+        - EncodeCompleteRuleE2F74999
+        - Arn
+    Metadata:
+      'aws:cdk:path': >-
+        VideoOnDemand/EncodeCompleteRule/AllowEventRuleVideoOnDemandStepFunctionsLambda0CB4E0F5
+  S3Config:
+    Type: 'AWS::CloudFormation::CustomResource'
+    Properties:
+      ServiceToken: !GetAtt 
+        - CustomResource8CDCD7A7
+        - Arn
+      Resource: S3Notification
+      Source: !Ref Source71E471F1
+      IngestArn: !GetAtt 
+        - StepFunctionsLambda8B4F69C7
+        - Arn
+      WorkflowTrigger: !Ref WorkflowTrigger
+    DependsOn:
+      - StepFunctionsLambdaCloudWatchLambdaInvokeCompletes8CE78F7D
+      - StepFunctionsLambda8B4F69C7
+      - StepFunctionsLambdaS3LambdaInvokeVideo456192AA
+    UpdateReplacePolicy: Delete
+    DeletionPolicy: Delete
+    Metadata:
+      'aws:cdk:path': VideoOnDemand/S3Config/Default
+  StepFunctionsServiceRole2A83B843:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action: 'sts:AssumeRole'
+            Effect: Allow
+            Principal:
+              Service: !Join 
+                - ''
+                - - states.
+                  - !Ref 'AWS::Region'
+                  - .amazonaws.com
+        Version: 2012-10-17
+      Tags:
+        - Key: SolutionId
+          Value: SO0021
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W11
+            reason: >-
+              The * resource is required since the functions need to be created
+              before the state machine
+  StepFunctionsServiceRoleDefaultPolicy6AD67B91:
+    Type: 'AWS::IAM::Policy'
+    Properties:
+      PolicyDocument:
+        Statement:
+          - Action: 'lambda:InvokeFunction'
+            Effect: Allow
+            Resource:
+              - !GetAtt 
+                - InputValidateLambdaA739FF97
+                - Arn
+              - !Join 
+                - ''
+                - - !GetAtt 
+                    - InputValidateLambdaA739FF97
+                    - Arn
+                  - ':*'
+          - Action: 'lambda:InvokeFunction'
+            Effect: Allow
+            Resource:
+              - !GetAtt 
+                - MediaInfoLambda172F634B
+                - Arn
+              - !Join 
+                - ''
+                - - !GetAtt 
+                    - MediaInfoLambda172F634B
+                    - Arn
+                  - ':*'
+          - Action: 'lambda:InvokeFunction'
+            Effect: Allow
+            Resource:
+              - !GetAtt 
+                - DynamoUpdateLambda0DF14C26
+                - Arn
+              - !Join 
+                - ''
+                - - !GetAtt 
+                    - DynamoUpdateLambda0DF14C26
+                    - Arn
+                  - ':*'
+          - Action: 'lambda:InvokeFunction'
+            Effect: Allow
+            Resource:
+              - !GetAtt 
+                - StepFunctionsLambda8B4F69C7
+                - Arn
+              - !Join 
+                - ''
+                - - !GetAtt 
+                    - StepFunctionsLambda8B4F69C7
+                    - Arn
+                  - ':*'
+          - Action: 'lambda:InvokeFunction'
+            Effect: Allow
+            Resource:
+              - !GetAtt 
+                - SnsNotificationLambda1EA4A474
+                - Arn
+              - !Join 
+                - ''
+                - - !GetAtt 
+                    - SnsNotificationLambda1EA4A474
+                    - Arn
+                  - ':*'
+          - Action: 'lambda:InvokeFunction'
+            Effect: Allow
+            Resource:
+              - !GetAtt 
+                - ProfilerLambdaFAFF7893
+                - Arn
+              - !Join 
+                - ''
+                - - !GetAtt 
+                    - ProfilerLambdaFAFF7893
+                    - Arn
+                  - ':*'
+          - Action: 'lambda:InvokeFunction'
+            Effect: Allow
+            Resource:
+              - !GetAtt 
+                - EncodeLambdaDADCB2BB
+                - Arn
+              - !Join 
+                - ''
+                - - !GetAtt 
+                    - EncodeLambdaDADCB2BB
+                    - Arn
+                  - ':*'
+          - Action: 'lambda:InvokeFunction'
+            Effect: Allow
+            Resource:
+              - !GetAtt 
+                - OutputValidateLambda2645C4BB
+                - Arn
+              - !Join 
+                - ''
+                - - !GetAtt 
+                    - OutputValidateLambda2645C4BB
+                    - Arn
+                  - ':*'
+          - Action: 'lambda:InvokeFunction'
+            Effect: Allow
+            Resource:
+              - !GetAtt 
+                - ArchiveSourceLambda320F09D9
+                - Arn
+              - !Join 
+                - ''
+                - - !GetAtt 
+                    - ArchiveSourceLambda320F09D9
+                    - Arn
+                  - ':*'
+          - Action: 'lambda:InvokeFunction'
+            Effect: Allow
+            Resource:
+              - !GetAtt 
+                - MediaPackageAssetsLambda63EB0986
+                - Arn
+              - !Join 
+                - ''
+                - - !GetAtt 
+                    - MediaPackageAssetsLambda63EB0986
+                    - Arn
+                  - ':*'
+          - Action: 'lambda:InvokeFunction'
+            Effect: Allow
+            Resource:
+              - !GetAtt 
+                - SqsSendMessageLambda156FD22A
+                - Arn
+              - !Join 
+                - ''
+                - - !GetAtt 
+                    - SqsSendMessageLambda156FD22A
+                    - Arn
+                  - ':*'
+        Version: 2012-10-17
+      PolicyName: StepFunctionsServiceRoleDefaultPolicy6AD67B91
+      Roles:
+        - !Ref StepFunctionsServiceRole2A83B843
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W76
+            reason: testestesteslsdkfjsdlkfjlskdfklsdljf
+      cdk_nag:
+        rules_to_suppress:
+          - reason: >-
+              Statements added to default policy by
+              aws-stepfunctions.StateMachine class
+            id: AwsSolutions-IAM5
+  StepFunctionsServicePolicy7123B955:
+    Type: 'AWS::IAM::Policy'
+    Properties:
+      PolicyDocument:
+        Statement:
+          - Action: 'lambda:InvokeFunction'
+            Effect: Allow
+            Resource: !Join 
+              - ''
+              - - 'arn:'
+                - !Ref 'AWS::Partition'
+                - ':lambda:'
+                - !Ref 'AWS::Region'
+                - ':'
+                - !Ref 'AWS::AccountId'
+                - ':function:*'
+        Version: 2012-10-17
+      PolicyName: !Join 
+        - ''
+        - - !Ref 'AWS::StackName'
+          - '-stepfunctions-service-role'
+      Roles:
+        - !Ref StepFunctionsServiceRole2A83B843
+    Metadata:
+      'aws:cdk:path': VideoOnDemand/StepFunctionsServicePolicy/Resource
+      cdk_nag:
+        rules_to_suppress:
+          - reason: '* is used so that the Lambda function can create log groups'
+            id: AwsSolutions-IAM5
+  IngestWorkflow58F2BCD4:
+    Type: 'AWS::StepFunctions::StateMachine'
+    Properties:
+      RoleArn: !GetAtt 
+        - StepFunctionsServiceRole2A83B843
+        - Arn
+      DefinitionString: !Join 
+        - ''
+        - - >-
+            {"StartAt":"Input Validate","States":{"Input
+            Validate":{"Next":"MediaInfo","Retry":[{"ErrorEquals":["Lambda.ServiceException","Lambda.AWSLambdaException","Lambda.SdkClientException"],"IntervalSeconds":2,"MaxAttempts":6,"BackoffRate":2}],"Type":"Task","Resource":"
+          - !GetAtt 
+            - InputValidateLambdaA739FF97
+            - Arn
+          - >-
+            "},"MediaInfo":{"Next":"DynamoDB Update
+            (Ingest)","Retry":[{"ErrorEquals":["Lambda.ServiceException","Lambda.AWSLambdaException","Lambda.SdkClientException"],"IntervalSeconds":2,"MaxAttempts":6,"BackoffRate":2}],"Type":"Task","Resource":"
+          - !GetAtt 
+            - MediaInfoLambda172F634B
+            - Arn
+          - >-
+            "},"DynamoDB Update (Ingest)":{"Next":"SNS Choice
+            (Ingest)","Retry":[{"ErrorEquals":["Lambda.ServiceException","Lambda.AWSLambdaException","Lambda.SdkClientException"],"IntervalSeconds":2,"MaxAttempts":6,"BackoffRate":2}],"Type":"Task","Resource":"
+          - !GetAtt 
+            - DynamoUpdateLambda0DF14C26
+            - Arn
+          - >-
+            "},"SNS Choice
+            (Ingest)":{"Type":"Choice","Choices":[{"Variable":"$.enableSns","BooleanEquals":true,"Next":"SNS
+            Notification (Ingest)"}],"Default":"Process Execute"},"Process
+            Execute":{"End":true,"Retry":[{"ErrorEquals":["Lambda.ServiceException","Lambda.AWSLambdaException","Lambda.SdkClientException"],"IntervalSeconds":2,"MaxAttempts":6,"BackoffRate":2}],"Type":"Task","Resource":"
+          - !GetAtt 
+            - StepFunctionsLambda8B4F69C7
+            - Arn
+          - >-
+            "},"SNS Notification (Ingest)":{"Next":"Process
+            Execute","Retry":[{"ErrorEquals":["Lambda.ServiceException","Lambda.AWSLambdaException","Lambda.SdkClientException"],"IntervalSeconds":2,"MaxAttempts":6,"BackoffRate":2}],"Type":"Task","Resource":"
+          - !GetAtt 
+            - SnsNotificationLambda1EA4A474
+            - Arn
+          - '"}}}'
+      StateMachineName: !Join 
+        - ''
+        - - !Ref 'AWS::StackName'
+          - '-ingest'
+      Tags:
+        - Key: SolutionId
+          Value: SO0021
+    DependsOn:
+      - StepFunctionsServiceRoleDefaultPolicy6AD67B91
+      - StepFunctionsServiceRole2A83B843
+    Metadata:
+      'aws:cdk:path': VideoOnDemand/IngestWorkflow/Resource
+      cdk_nag:
+        rules_to_suppress:
+          - reason: Logging handled by DynamoDB Update step and Error Handler lambda
+            id: AwsSolutions-SF1
+          - reason: Optional configuration for this solution
+            id: AwsSolutions-SF2
+  ProcessWorkflow95FAF321:
+    Type: 'AWS::StepFunctions::StateMachine'
+    Properties:
+      RoleArn: !GetAtt 
+        - StepFunctionsServiceRole2A83B843
+        - Arn
+      DefinitionString: !Join 
+        - ''
+        - - >-
+            {"StartAt":"Profiler","States":{"Profiler":{"Next":"Encoding Profile
+            Check","Retry":[{"ErrorEquals":["Lambda.ServiceException","Lambda.AWSLambdaException","Lambda.SdkClientException"],"IntervalSeconds":2,"MaxAttempts":6,"BackoffRate":2}],"Type":"Task","Resource":"
+          - !GetAtt 
+            - ProfilerLambdaFAFF7893
+            - Arn
+          - >-
+            "},"Encoding Profile
+            Check":{"Type":"Choice","Choices":[{"Variable":"$.isCustomTemplate","BooleanEquals":true,"Next":"Custom
+            jobTemplate"},{"Variable":"$.encodingProfile","NumericEquals":2160,"Next":"jobTemplate
+            2160p"},{"Variable":"$.encodingProfile","NumericEquals":1080,"Next":"jobTemplate
+            1080p"},{"Variable":"$.encodingProfile","NumericEquals":720,"Next":"jobTemplate
+            720p"}]},"Custom jobTemplate":{"Type":"Pass","Next":"Accelerated
+            Transcoding Check"},"Accelerated Transcoding
+            Check":{"Type":"Choice","Choices":[{"Variable":"$.acceleratedTranscoding","StringEquals":"ENABLED","Next":"Enabled"},{"Variable":"$.acceleratedTranscoding","StringEquals":"PREFERRED","Next":"Preferred"},{"Variable":"$.acceleratedTranscoding","StringEquals":"DISABLED","Next":"Disabled"}]},"jobTemplate
+            2160p":{"Type":"Pass","Next":"Accelerated Transcoding
+            Check"},"jobTemplate 1080p":{"Type":"Pass","Next":"Accelerated
+            Transcoding Check"},"jobTemplate
+            720p":{"Type":"Pass","Next":"Accelerated Transcoding
+            Check"},"Enabled":{"Type":"Pass","Next":"Frame Capture
+            Check"},"Frame Capture
+            Check":{"Type":"Choice","Choices":[{"Variable":"$.frameCapture","BooleanEquals":true,"Next":"Frame
+            Capture"},{"Variable":"$.frameCapture","BooleanEquals":false,"Next":"No
+            Frame Capture"}]},"Preferred":{"Type":"Pass","Next":"Frame Capture
+            Check"},"Disabled":{"Type":"Pass","Next":"Frame Capture
+            Check"},"Frame Capture":{"Type":"Pass","Next":"Encode Job
+            Submit"},"Encode Job Submit":{"Next":"DynamoDB Update
+            (Process)","Retry":[{"ErrorEquals":["Lambda.ServiceException","Lambda.AWSLambdaException","Lambda.SdkClientException"],"IntervalSeconds":2,"MaxAttempts":6,"BackoffRate":2}],"Type":"Task","Resource":"
+          - !GetAtt 
+            - EncodeLambdaDADCB2BB
+            - Arn
+          - >-
+            "},"No Frame Capture":{"Type":"Pass","Next":"Encode Job
+            Submit"},"DynamoDB Update
+            (Process)":{"End":true,"Retry":[{"ErrorEquals":["Lambda.ServiceException","Lambda.AWSLambdaException","Lambda.SdkClientException"],"IntervalSeconds":2,"MaxAttempts":6,"BackoffRate":2}],"Type":"Task","Resource":"
+          - !GetAtt 
+            - DynamoUpdateLambda0DF14C26
+            - Arn
+          - '"}}}'
+      StateMachineName: !Join 
+        - ''
+        - - !Ref 'AWS::StackName'
+          - '-process'
+      Tags:
+        - Key: SolutionId
+          Value: SO0021
+    DependsOn:
+      - StepFunctionsServiceRoleDefaultPolicy6AD67B91
+      - StepFunctionsServiceRole2A83B843
+    Metadata:
+      'aws:cdk:path': VideoOnDemand/ProcessWorkflow/Resource
+      cdk_nag:
+        rules_to_suppress:
+          - reason: Logging handled by DynamoDB Update step and Error Handler lambda
+            id: AwsSolutions-SF1
+          - reason: Optional configuration for this solution
+            id: AwsSolutions-SF2
+  PublishWorkflowEF670320:
+    Type: 'AWS::StepFunctions::StateMachine'
+    Properties:
+      RoleArn: !GetAtt 
+        - StepFunctionsServiceRole2A83B843
+        - Arn
+      DefinitionString: !Join 
+        - ''
+        - - >-
+            {"StartAt":"Validate Encoding Outputs","States":{"Validate Encoding
+            Outputs":{"Next":"Archive Source
+            Choice","Retry":[{"ErrorEquals":["Lambda.ServiceException","Lambda.AWSLambdaException","Lambda.SdkClientException"],"IntervalSeconds":2,"MaxAttempts":6,"BackoffRate":2}],"Type":"Task","Resource":"
+          - !GetAtt 
+            - OutputValidateLambda2645C4BB
+            - Arn
+          - >-
+            "},"Archive Source
+            Choice":{"Type":"Choice","Choices":[{"Variable":"$.archiveSource","StringEquals":"GLACIER","Next":"Archive"},{"Variable":"$.archiveSource","StringEquals":"DEEP_ARCHIVE","Next":"Deep
+            Archive"}],"Default":"MediaPackage Choice"},"MediaPackage
+            Choice":{"Type":"Choice","Choices":[{"Variable":"$.enableMediaPackage","BooleanEquals":true,"Next":"MediaPackage
+            Assets"}],"Default":"DynamoDB Update
+            (Publish)"},"Archive":{"Next":"MediaPackage
+            Choice","Retry":[{"ErrorEquals":["Lambda.ServiceException","Lambda.AWSLambdaException","Lambda.SdkClientException"],"IntervalSeconds":2,"MaxAttempts":6,"BackoffRate":2}],"Type":"Task","Resource":"
+          - !GetAtt 
+            - ArchiveSourceLambda320F09D9
+            - Arn
+          - >-
+            "},"Deep Archive":{"Next":"MediaPackage
+            Choice","Retry":[{"ErrorEquals":["Lambda.ServiceException","Lambda.AWSLambdaException","Lambda.SdkClientException"],"IntervalSeconds":2,"MaxAttempts":6,"BackoffRate":2}],"Type":"Task","Resource":"
+          - !GetAtt 
+            - ArchiveSourceLambda320F09D9
+            - Arn
+          - >-
+            "},"DynamoDB Update (Publish)":{"Next":"SQS
+            Choice","Retry":[{"ErrorEquals":["Lambda.ServiceException","Lambda.AWSLambdaException","Lambda.SdkClientException"],"IntervalSeconds":2,"MaxAttempts":6,"BackoffRate":2}],"Type":"Task","Resource":"
+          - !GetAtt 
+            - DynamoUpdateLambda0DF14C26
+            - Arn
+          - >-
+            "},"MediaPackage Assets":{"Next":"DynamoDB Update
+            (Publish)","Retry":[{"ErrorEquals":["Lambda.ServiceException","Lambda.AWSLambdaException","Lambda.SdkClientException"],"IntervalSeconds":2,"MaxAttempts":6,"BackoffRate":2}],"Type":"Task","Resource":"
+          - !GetAtt 
+            - MediaPackageAssetsLambda63EB0986
+            - Arn
+          - >-
+            "},"SQS
+            Choice":{"Type":"Choice","Choices":[{"Variable":"$.enableSqs","BooleanEquals":true,"Next":"SQS
+            Send Message"}],"Default":"SNS Choice (Publish)"},"SNS Choice
+            (Publish)":{"Type":"Choice","Choices":[{"Variable":"$.enableSns","BooleanEquals":true,"Next":"SNS
+            Notification (Publish)"}],"Default":"Complete"},"SQS Send
+            Message":{"Next":"SNS Choice
+            (Publish)","Retry":[{"ErrorEquals":["Lambda.ServiceException","Lambda.AWSLambdaException","Lambda.SdkClientException"],"IntervalSeconds":2,"MaxAttempts":6,"BackoffRate":2}],"Type":"Task","Resource":"
+          - !GetAtt 
+            - SqsSendMessageLambda156FD22A
+            - Arn
+          - >-
+            "},"Complete":{"Type":"Pass","End":true},"SNS Notification
+            (Publish)":{"Next":"Complete","Retry":[{"ErrorEquals":["Lambda.ServiceException","Lambda.AWSLambdaException","Lambda.SdkClientException"],"IntervalSeconds":2,"MaxAttempts":6,"BackoffRate":2}],"Type":"Task","Resource":"
+          - !GetAtt 
+            - SnsNotificationLambda1EA4A474
+            - Arn
+          - '"}}}'
+      StateMachineName: !Join 
+        - ''
+        - - !Ref 'AWS::StackName'
+          - '-publish'
+      Tags:
+        - Key: SolutionId
+          Value: SO0021
+    DependsOn:
+      - StepFunctionsServiceRoleDefaultPolicy6AD67B91
+      - StepFunctionsServiceRole2A83B843
+    Metadata:
+      'aws:cdk:path': VideoOnDemand/PublishWorkflow/Resource
+      cdk_nag:
+        rules_to_suppress:
+          - reason: Logging handled by DynamoDB Update step and Error Handler lambda
+            id: AwsSolutions-SF1
+          - reason: Optional configuration for this solution
+            id: AwsSolutions-SF2
+  UUID:
+    Type: 'AWS::CloudFormation::CustomResource'
+    Properties:
+      ServiceToken: !GetAtt 
+        - CustomResource8CDCD7A7
+        - Arn
+      Resource: UUID
+    UpdateReplacePolicy: Delete
+    DeletionPolicy: Delete
+    Metadata:
+      'aws:cdk:path': VideoOnDemand/UUID/Default
+  AnonymousMetric:
+    Type: 'AWS::CloudFormation::CustomResource'
+    Properties:
+      ServiceToken: !GetAtt 
+        - CustomResource8CDCD7A7
+        - Arn
+      Resource: AnonymousMetric
+      SolutionId: SO0021
+      UUID: !GetAtt 
+        - UUID
+        - UUID
+      Version: v6.1.2
+      Transcoder: MediaConvert
+      WorkflowTrigger: !Ref WorkflowTrigger
+      Glacier: !Ref Glacier
+      FrameCapture: !Ref FrameCapture
+      EnableMediaPackage: !Ref EnableMediaPackage
+    UpdateReplacePolicy: Delete
+    DeletionPolicy: Delete
+    Metadata:
+      'aws:cdk:path': VideoOnDemand/AnonymousMetric/Default
+  AppRegistryAttributeGroupId7C2D526E:
+    Type: 'AWS::ServiceCatalogAppRegistry::AttributeGroup'
+    Properties:
+      Attributes:
+        applicationType: AWS-Solutions
+        version: v6.1.2
+        solutionID: SO0021
+        solutionName: Video on Demand on AWS
+      Name: !Join 
+        - ''
+        - - A30-
+          - !Ref 'AWS::Region'
+          - '-'
+          - !Ref 'AWS::StackName'
+      Description: Attribute group for solution information
+      Tags:
+        SolutionId: SO0021
+    Metadata:
+      'aws:cdk:path': VideoOnDemand/AppRegistryAttributeGroupId/Resource
+  AppRegistryApp5349BE86:
+    Type: 'AWS::ServiceCatalogAppRegistry::Application'
+    Properties:
+      Name: !Join 
+        - ''
+        - - video-on-demand-on-aws-
+          - !Ref 'AWS::Region'
+          - '-'
+          - !Ref 'AWS::AccountId'
+          - '-'
+          - !Ref 'AWS::StackName'
+      Description: >-
+        Service Catalog application to track and manage all your resources. The
+        SolutionId is SO0021 and SolutionVersion is v6.1.2.
+      Tags:
+        SolutionId: SO0021
+        'Solutions:ApplicationType': AWS-Solutions
+        'Solutions:SolutionID': SO0021
+        'Solutions:SolutionName': Video on Demand on AWS
+        'Solutions:SolutionVersion': v6.1.2
+    DependsOn:
+      - AppRegistryAttributeGroupId7C2D526E
+    Metadata:
+      'aws:cdk:path': VideoOnDemand/AppRegistryApp/Resource
+  AppRegistryAppAttributeGroupAssociation9a1cc5a2b862D1166969:
+    Type: 'AWS::ServiceCatalogAppRegistry::AttributeGroupAssociation'
+    Properties:
+      Application: !GetAtt 
+        - AppRegistryApp5349BE86
+        - Id
+      AttributeGroup: !GetAtt 
+        - AppRegistryAttributeGroupId7C2D526E
+        - Id
+    DependsOn:
+      - AppRegistryAttributeGroupId7C2D526E
+    Metadata:
+      'aws:cdk:path': VideoOnDemand/AppRegistryApp/AttributeGroupAssociation9a1cc5a2b862
+  AppRegistryAssociation:
+    Type: 'AWS::ServiceCatalogAppRegistry::ResourceAssociation'
+    Properties:
+      Application: !GetAtt 
+        - AppRegistryApp5349BE86
+        - Id
+      Resource: !Ref 'AWS::StackId'
+      ResourceType: CFN_STACK
+    Metadata:
+      'aws:cdk:path': VideoOnDemand/AppRegistryAssociation
+  CDKMetadata:
+    Type: 'AWS::CDK::Metadata'
+    Properties:
+      Analytics: >-
+        v2:deflate64:H4sIAAAAAAAA/3VTTW/bMAz9Lb3LatqgG3ZbmqFDgRbNktwDWWYc1bbkiVKGQPB/HyU7szqgF/P7kY+i73l4WPCwuBF/sJBVU7Sq5GHnhGzY+qg3wooOHNhovIq+V7qO6troSjllNKO6Q8AlD49eNuBicNJGsTGtkpfZPdmj8SgQBiZb46ujNdrxsBbyBHNNbv5Q6KwqfWr7ZlWt9EpKQHyuQDvlxoKI9RSxPsvIYQamRMfD1rQQQ0nOzUdtYK3oykrw8OS1TM0plusbsJ1CTHi4PAhEcMhXUTDUyMPe9ErGzFHZ+RKlVf21PrcJ4TdV/PLg00ijkr7zYJk5sOqiRWcqerW9KEceSRkYnIk1gW39RM9HLzroj9P0eHACG+QvieGzPpsGPibwsCE+bH0ySgKju3DwSm+idELMbUIGe6YsKZxoTU3HYqGOy77Qsx71yo1rh5/W+D5Wr/qeKIjrGj4m0PqMVP+CW0DjrYTMPQws7ZiGqNNZenSmuybmRSx3vnnXezewRSHa/iT44ub7dPu3UX5KYkoP//HISNBA91+veGjadGKETB9nvXSYGszXXtBvM9/r3uyWA9OmAv6Ot+e7L/zuG4G9o1KF9XS+HfDtKP8CZHGbvbUDAAA=
+    Metadata:
+      'aws:cdk:path': VideoOnDemand/CDKMetadata/Default
+    Condition: CDKMetadataAvailable
+Outputs:
+  DynamoDBTableName:
+    Description: DynamoDB Table
+    Value: !Ref DynamoDBTable59784FC0
+    Export:
+      Name: !Join 
+        - ''
+        - - !Ref 'AWS::StackName'
+          - ':DynamoDBTable'
+  SourceBucketName:
+    Description: Source Bucket
+    Value: !Ref Source71E471F1
+    Export:
+      Name: !Join 
+        - ''
+        - - !Ref 'AWS::StackName'
+          - ':Source'
+  DestinationBucketName:
+    Description: Destination Bucket
+    Value: !Ref Destination920A3C57
+    Export:
+      Name: !Join 
+        - ''
+        - - !Ref 'AWS::StackName'
+          - ':Destination'
+  CloudFrontDomainName:
+    Description: CloudFront Domain Name
+    Value: !GetAtt 
+      - CloudFrontToS3CloudFrontDistribution241D9866
+      - DomainName
+    Export:
+      Name: !Join 
+        - ''
+        - - !Ref 'AWS::StackName'
+          - ':CloudFront'
+  AnonymousMetricUUID:
+    Description: AnonymousMetric UUID
+    Value: !GetAtt 
+      - UUID
+      - UUID
+    Export:
+      Name: !Join 
+        - ''
+        - - !Ref 'AWS::StackName'
+          - ':UUID'
+  SnsTopicName:
+    Description: SNS Topic
+    Value: !GetAtt 
+      - SnsTopic2C1570A4
+      - TopicName
+    Export:
+      Name: !Join 
+        - ''
+        - - !Ref 'AWS::StackName'
+          - ':SnsTopic'
+  SqsUrl:
+    Description: SQS Queue URL
+    Value: !Ref SqsQueue13597403
+    Export:
+      Name: !Join 
+        - ''
+        - - !Ref 'AWS::StackName'
+          - ':SqsQueue'
+  SqsArn:
+    Description: SQS Queue ARN
+    Value: !GetAtt 
+      - SqsQueue13597403
+      - Arn
+    Export:
+      Name: !Join 
+        - ''
+        - - !Ref 'AWS::StackName'
+          - ':SqsQueueArn'
+  AppRegistryConsole:
+    Description: AppRegistry
+    Value: !Join 
+      - ''
+      - - 'https://'
+        - !Ref 'AWS::Region'
+        - '.console.aws.amazon.com/servicecatalog/home?#applications/'
+        - !GetAtt 
+          - AppRegistryApp5349BE86
+          - Id
+    Export:
+      Name: !Join 
+        - ''
+        - - !Ref 'AWS::StackName'
+          - '-AppRegistry'
