@@ -145,3 +145,4 @@ The following improvements and features are planned for future development of th
 - Evaluate the potential benefits of migrating from AWS EC2 to Elastic Container Service and Fargate for better container management and scaling.
 - Not attempted yet due to cost concerns. 
 
+
