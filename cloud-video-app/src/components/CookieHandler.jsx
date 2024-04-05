@@ -26,7 +26,7 @@ const isCookieExpired = (cookieName) => {
 };
 
 const CookieHandler = () => {
-    const [cookieName] = useState('yourCookieName'); // Removed setCookieName
+    const [cookieName] = useState('yourCookieName'); // Removed setCookieName 
 
     useEffect(() => {
         const checkAndFetchCookies = async () => {
