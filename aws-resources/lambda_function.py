@@ -99,7 +99,7 @@ def lambda_handler(event, context):
         }
 
     private_key_pem = get_secret()
-    # signed_cookie = generate_signed_cookie(item['hlsUrl'], key_pair_id, private_key_pem)
+    # signed_cookie = generate_signed_cookie(item['hlsUrl'], key_pair_id, private_key_pem) 
 
     result = {
         'guid': item['guid'],
